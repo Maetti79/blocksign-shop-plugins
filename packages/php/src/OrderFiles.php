@@ -11,10 +11,12 @@ final class OrderFiles
         $downloads = [];
         $documents = [];
         foreach ($products as $id => $files) {
-            $downloads[$id] = [
-                'file' => $files['download_file'],
-                'hash' => $files['download_hash'],
-            ];
+            if (isset($files['download_file'], $files['download_hash'])) {
+                $downloads[$id] = [
+                    'file' => $files['download_file'],
+                    'hash' => $files['download_hash'],
+                ];
+            }
             foreach ($files['documents'] as $document) {
                 $key = json_encode([$document['file'], $document['agreement_hash'], $document['placement']], JSON_THROW_ON_ERROR);
                 $documents[$key] ??= $document;

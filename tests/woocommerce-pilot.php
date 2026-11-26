@@ -30,13 +30,29 @@ class WC_Order
     public float $total = 0;
     public float $refunded = 0;
     public bool $paid = false;
+    public string $status = 'pending';
+    public array $changes = [];
+    public ?int $completedAt = null;
     public string $email = 'customer@example.com';
     public ?DateTimeImmutable $paidAt = null;
 
     public function get_total(): float { return $this->total; }
     public function get_total_refunded(): float { return $this->refunded; }
     public function is_paid(): bool { return $this->paid; }
-    public function get_date_paid(): ?DateTimeImmutable { return $this->paidAt; }
+    public function get_date_paid(string $context = 'view'): ?DateTimeImmutable { return $this->paidAt; }
+    public function set_date_paid(int $timestamp): void { $this->paidAt = new DateTimeImmutable('@' . $timestamp); }
+    public function set_date_completed(?int $timestamp): void { $this->completedAt = $timestamp; }
+    public function get_changes(): array { return $this->changes; }
+    public function set_status(string $status, string $note = ''): void
+    {
+        $this->changes['status'] = $this->status = $status;
+    }
+
+    public function update_status(string $status, string $note = ''): bool
+    {
+        $this->set_status($status, $note);
+        return true;
+    }
     public function get_payment_method(): string { return $this->method; }
     public function get_id(): int { return 42; }
     public function needs_payment(): bool { return $this->total > 0 && !$this->paid; }
@@ -58,7 +74,7 @@ class WC_Order
 
     public function has_status(array $statuses): bool
     {
-        return false;
+        return in_array($this->status, $statuses, true);
     }
 
     public function update_meta_data(string $key, array $value): void
@@ -242,6 +258,7 @@ function get_option(string $name, mixed $default = false): mixed
     };
 }
 
+function wc_maybe_reduce_stock_levels(int $id): void { $GLOBALS['stock_reduced_for'] = $id; }
 function wp_unslash(string $value): string { return stripslashes($value); }
 function absint(int $value): int { return abs($value); }
 function is_email(string $value): bool { return filter_var($value, FILTER_VALIDATE_EMAIL) !== false; }
@@ -631,3 +648,37 @@ $another->total = 10;
 $hooks['woocommerce_store_api_checkout_order_processed']($another);
 check($another->state['documents'][0]['completed'] && !$another->paid, 'approved Store API order could not proceed');
 echo "PASS WooCommerce before-order protection in classic checkout and Checkout Blocks\n";
+
+$configured_timing = 'after_payment';
+$configured_scope = ['mode' => 'product', 'category_id' => 0];
+$order = new WC_Order();
+$order->items = [new WC_Order_Item(15, false)];
+$order->total = 10;
+$hooks['woocommerce_checkout_create_order']($order);
+check($order->state === [], 'unmarked physical product activated shipping hold');
+
+$_POST['_blocksign_esign_shipping'] = 'yes';
+$hooks['woocommerce_admin_process_product_object'](new WC_Product(false));
+unset($_POST['_blocksign_esign_shipping']);
+$hooks['woocommerce_checkout_create_order']($order);
+check(!empty($order->state['hold_shipping']) && $order->state['downloads'] === [], 'physical product must request documents without a download');
+$paymentStatus = $filters['woocommerce_payment_complete_order_status'];
+check($paymentStatus('processing', 42, $order) === 'bsesign-hold', 'gateway would mark an unconfirmed order ready for dispatch');
+$order->set_status('completed');
+$order->completedAt = time();
+$hooks['woocommerce_before_order_object_save']($order);
+check($order->status === 'bsesign-hold' && $order->completedAt === null, 'direct status change bypassed shipping hold');
+$hooks['woocommerce_order_status_bsesign-hold'](42, $order);
+check($stock_reduced_for === 42, 'held paid order did not run stock handling');
+\BlockSign\WooCommerce\release_shipping(42);
+check($order->status === 'bsesign-hold', 'incomplete documents released the order');
+
+$order->state['documents'][0]['completed'] = true;
+$order->refunded = 2;
+\BlockSign\WooCommerce\release_shipping(42);
+check($order->status === 'bsesign-hold', 'partially refunded order was released');
+$order->refunded = 0;
+\BlockSign\WooCommerce\release_shipping(42);
+check($order->status === 'processing', 'confirmed paid order was not released for shipping');
+check($paymentStatus('processing', 42, $order) === 'processing', 'signed order was sent back to hold');
+echo "PASS WooCommerce physical order hold, stock and shipping release\n";

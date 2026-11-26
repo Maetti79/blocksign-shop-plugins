@@ -69,6 +69,14 @@ Wähle unter **Signature timing** die Option **Before order**. Der erste Checkou
 
 Die Bestätigung gilt bis zu sieben Tage für die Checkout-Sitzung, den Warenkorb, die E-Mail-Adresse, den Gesamtbetrag und die Dokumentversionen. Eine Bestellung verbraucht die Bestätigung. Bei geänderten Angaben startet ein neuer Vorgang. Wenn die Bestellerstellung nach dem Verbrauch fehlschlägt, muss der Kunde erneut bestätigen. Der Modus gilt im klassischen Checkout und in Checkout Blocks ohne Express-Zahlungsbuttons. Checkout Blocks kann einen internen Bestellentwurf speichern. Er bleibt bis zur Bestätigung ein Entwurf, und der Zahlungsanbieter wird in dieser Phase nicht aufgerufen.
 
+## Versandfreigabe für physische Produkte
+
+Aktiviere **Require BlockSign before shipping** unter **Produktdaten → Allgemein** für ein einfaches, physisches Produkt. Das Produkt verwendet seine eigenen oder die shopweiten Pflichtdokumente. Für die Versandposition ist keine private Download-Datei erforderlich. Enthält ein Warenkorb eine solche Position, gilt die Versandfreigabe für die gesamte Bestellung.
+
+Nach der Zahlung führt WooCommerce eine noch offene Bestellung unter **Awaiting BlockSign confirmation**. Der Bestand wird mit der regulären WooCommerce-Logik berücksichtigt. Sind die Pflichtdokumente bestätigt, setzt der Worker die Bestellung auf **Processing**, damit die Versandbearbeitung beginnen kann. Bestätigen Kunden die Dokumente bereits vor der Bestellabgabe oder Zahlung, geht die Bestellung nach erfolgter Zahlung direkt in die reguläre Bearbeitung.
+
+Versand- und ERP-Integrationen müssen den WooCommerce-Status **Processing** abwarten. Eine Integration, die schon auf das Zahlungsevent versendet, braucht eine eigene Sperre. Prüfe den Ablauf mit deinem Zahlungsanbieter und deiner Versandsoftware im Testshop. Nachnahme wird für geschützte Bestellungen nicht unterstützt.
+
 ## Elektronischer Zustellnachweis
 
 Wähle **Proof of delivery** für das erste Pflichtdokument. Für ein zusätzliches PDF verwende die Kurzform `mitteilung.pdf | POD`. Bei einer Kategorie stellst du ihre ID voran, zum Beispiel `21 | mitteilung.pdf | POD`. BlockSign versendet das Dokument zur Empfangsbestätigung. Für diesen Vorgang sind keine Signaturposition oder Signaturstufe erforderlich.

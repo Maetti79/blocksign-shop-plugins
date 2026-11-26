@@ -22,9 +22,15 @@ final class ProductFiles
         return $value;
     }
 
-    public static function snapshot(array $overrides, array $placement, array $additional, Closure $locate): array
+    public static function snapshot(array $overrides, array $placement, array $additional, Closure $locate, bool $hasDownload = true): array
     {
         $agreement = self::validate($overrides['agreement'] ?? '') ?: self::DEFAULTS['agreement'];
+        if (!$hasDownload) {
+            if (in_array(strtolower($agreement), array_map('strtolower', array_keys($additional)), true)) {
+                throw new RuntimeException('Use different files for each required document.');
+            }
+            return ['documents' => RequiredSignatures::snapshot($placement, $additional, $locate, $agreement)];
+        }
         $download = self::validate($overrides['download'] ?? '') ?: self::DEFAULTS['download'];
         $additionalNames = array_map('strtolower', array_keys($additional));
         if (strcasecmp($agreement, $download) === 0 || in_array(strtolower($download), $additionalNames, true)

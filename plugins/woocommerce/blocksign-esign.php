@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BlockSign eSign for WooCommerce
  * Description: Release a free virtual product after BlockSign confirms its signature.
- * Version: 0.13.0
+ * Version: 0.14.0
  * Requires PHP: 8.1
  * Requires Plugins: woocommerce
  * License: GPL-3.0-or-later
@@ -52,6 +52,8 @@ const META = '_blocksign_esign';
 const JOB = 'blocksign_esign_check';
 const GROUP = 'blocksign-esign';
 const PRODUCT_FLAG = '_blocksign_esign_required';
+const SHIPPING_FLAG = '_blocksign_esign_shipping';
+const SHIPPING_HOLD = 'bsesign-hold';
 const CHECKOUT_DEFERRED = 'blocksign_esign_payment_deferred';
 const PREORDER_JOB = 'blocksign_esign_preorder_check';
 const PREORDER_NOTICE = 'Check your email for BlockSign. After confirming all documents, submit the checkout again.';
@@ -181,14 +183,19 @@ add_action('woocommerce_product_options_general_product_data', static function (
         return;
     }
     // Distinguish an unchecked field from an update made outside the full product editor.
-    printf('<input type="hidden" name="%s" value="no">', esc_attr(PRODUCT_FLAG));
-    woocommerce_wp_checkbox([
-        'id' => PRODUCT_FLAG,
-        'label' => 'Require BlockSign eSign',
-        'description' => 'Applies when BlockSign is configured to use marked products.',
-        'value' => $product_object->get_meta(PRODUCT_FLAG) === 'yes' ? 'yes' : 'no',
-        'wrapper_class' => 'show_if_simple',
-    ]);
+    foreach ([
+        PRODUCT_FLAG => ['Require BlockSign eSign', 'Applies when BlockSign is configured to use marked virtual products.'],
+        SHIPPING_FLAG => ['Require BlockSign before shipping', 'Holds the entire order in WooCommerce for this physical product.'],
+    ] as $key => [$label, $description]) {
+        printf('<input type="hidden" name="%s" value="no">', esc_attr($key));
+        woocommerce_wp_checkbox([
+            'id' => $key,
+            'label' => $label,
+            'description' => $description,
+            'value' => $product_object->get_meta($key) === 'yes' ? 'yes' : 'no',
+            'wrapper_class' => 'show_if_simple',
+        ]);
+    }
     foreach (ProductFiles::DEFAULTS as $kind => $default) {
         $key = '_blocksign_esign_' . $kind . '_file';
         woocommerce_wp_text_input([
@@ -203,11 +210,13 @@ add_action('woocommerce_product_options_general_product_data', static function (
 });
 
 add_action('woocommerce_admin_process_product_object', static function (WC_Product $product): void {
-    $value = $_POST[PRODUCT_FLAG] ?? null;
-    if ($value === 'yes') {
-        $product->update_meta_data(PRODUCT_FLAG, 'yes');
-    } elseif ($value === 'no') {
-        $product->delete_meta_data(PRODUCT_FLAG);
+    foreach ([PRODUCT_FLAG, SHIPPING_FLAG] as $key) {
+        $value = $_POST[$key] ?? null;
+        if ($value === 'yes') {
+            $product->update_meta_data($key, 'yes');
+        } elseif ($value === 'no') {
+            $product->delete_meta_data($key);
+        }
     }
     foreach (array_keys(ProductFiles::DEFAULTS) as $kind) {
         $key = '_blocksign_esign_' . $kind . '_file';
@@ -266,7 +275,7 @@ function snapshot(WC_Order $order, bool $preview = false): void
             throw new RuntimeException('The confirmed checkout has expired or its total or currency has changed.');
         }
         if ($timing !== 'without_payment' && $order->get_payment_method() === 'cod') {
-            throw new RuntimeException('Cash on delivery is unavailable for the protected PDF.');
+            throw new RuntimeException('Cash on delivery is unavailable for protected BlockSign orders.');
         }
         if ($timing === 'before_payment' && !payment_allowed($order, $existing)) {
             $order->set_payment_method('');
@@ -277,12 +286,19 @@ function snapshot(WC_Order $order, bool $preview = false): void
     $scope = product_scope();
     $configuredProduct = configured_product();
     $products = [];
+    $shipping = [];
     foreach ($items as $item) {
         $id = (int) $item->get_product_id();
+        $product = $item->get_product();
+        if ($product instanceof WC_Product && $product->is_type('simple') && !$product->is_virtual()
+            && !$product->is_downloadable() && $product->get_meta(SHIPPING_FLAG) === 'yes') {
+            $shipping[$id] = true;
+            $products[$id] = $product;
+            continue;
+        }
         if ($scope['mode'] === 'product' && !ProductScope::matches($scope, $configuredProduct, $id)) {
             continue;
         }
-        $product = $item->get_product();
         $eligible = $product instanceof WC_Product && $product->is_type('simple')
             && $product->is_virtual() && !$product->is_downloadable();
         $categories = $scope['mode'] === 'category' && $eligible ? $product->get_category_ids() : [];
@@ -305,7 +321,7 @@ function snapshot(WC_Order $order, bool $preview = false): void
     $configuredTiming = paid_timing();
     $timing = $total > 0 || $configuredTiming === 'before_order' ? $configuredTiming : 'without_payment';
     if ($total > 0 && $order->get_payment_method() === 'cod') {
-        throw new RuntimeException('Cash on delivery is unavailable for the protected PDF.');
+        throw new RuntimeException('Cash on delivery is unavailable for protected BlockSign orders.');
     }
     if (!defined('BLOCKSIGN_ESIGN_API_KEY') || !BLOCKSIGN_ESIGN_API_KEY) {
         throw new RuntimeException('BlockSign is not configured.');
@@ -321,7 +337,8 @@ function snapshot(WC_Order $order, bool $preview = false): void
             ],
             $placement,
             CategoryDocuments::forProduct($additional, $categoryDocuments, $categoryDocuments ? $product->get_category_ids() : []),
-            asset(...)
+            asset(...),
+            !isset($shipping[$id])
         );
     }
     $state = OrderFiles::combine($products) + [
@@ -329,6 +346,9 @@ function snapshot(WC_Order $order, bool $preview = false): void
         'timing' => $timing,
         'signer_email' => $order->get_billing_email(),
     ];
+    if ($shipping) {
+        $state['hold_shipping'] = true;
+    }
     if ($timing === 'before_order' && !$preview) {
         $state = consume_preorder($state, $total);
     }
@@ -597,7 +617,7 @@ add_action('woocommerce_before_pay_action', static function (WC_Order $order): v
         wp_die('Confirm all required signatures and delivery confirmations before paying for this order.', '', ['response' => 409]);
     }
     if ($state && ($_POST['payment_method'] ?? '') === 'cod') {
-        wp_die('Cash on delivery is unavailable for the protected PDF.', '', ['response' => 409]);
+        wp_die('Cash on delivery is unavailable for protected BlockSign orders.', '', ['response' => 409]);
     }
 }, 1);
 
@@ -612,6 +632,67 @@ function enqueue_paid_order(int $id): void
 add_action('woocommerce_payment_complete', __NAMESPACE__ . '\enqueue_paid_order');
 add_action('woocommerce_order_status_changed', __NAMESPACE__ . '\enqueue_paid_order');
 
+add_action('init', static function (): void {
+    register_post_status('wc-' . SHIPPING_HOLD, [
+        'label' => 'Awaiting BlockSign confirmation',
+        'public' => false,
+        'exclude_from_search' => true,
+        'show_in_admin_all_list' => true,
+        'show_in_admin_status_list' => true,
+        'label_count' => _n_noop('Awaiting BlockSign confirmation <span class="count">(%s)</span>',
+            'Awaiting BlockSign confirmation <span class="count">(%s)</span>'),
+    ]);
+});
+
+add_filter('wc_order_statuses', static function (array $statuses): array {
+    $statuses['wc-' . SHIPPING_HOLD] = 'Awaiting BlockSign confirmation';
+    return $statuses;
+});
+
+add_action('woocommerce_order_status_' . SHIPPING_HOLD, static function (int $id, WC_Order $order): void {
+    if ((float) $order->get_total() === 0.0 || $order->get_date_paid('edit')) {
+        wc_maybe_reduce_stock_levels($id);
+    }
+}, 10, 2);
+
+function shipping_locked(WC_Order $order, array $state): bool
+{
+    return !empty($state['hold_shipping'])
+        && (!RequiredSignatures::complete($state) || strcasecmp($state['signer_email'], $order->get_billing_email()) !== 0);
+}
+
+add_filter('woocommerce_payment_complete_order_status', static function (string $status, int $id, WC_Order $order): string {
+    return shipping_locked($order, (array) $order->get_meta(META)) ? SHIPPING_HOLD : $status;
+}, PHP_INT_MAX, 3);
+
+add_action('woocommerce_before_order_object_save', static function (WC_Order $order): void {
+    if (!in_array($order->get_changes()['status'] ?? '', ['processing', 'completed'], true)
+        || !shipping_locked($order, (array) $order->get_meta(META))) {
+        return;
+    }
+
+    // Match WooCommerce's treatment of processing/completed as paid when a gateway or an operator sets the status directly.
+    if ($order->get_payment_method() !== 'cod' && !$order->get_date_paid('edit')) {
+        $order->set_date_paid(time());
+    }
+    $order->set_date_completed(null);
+    $order->set_status(SHIPPING_HOLD, 'Waiting for BlockSign confirmation before shipping.');
+}, PHP_INT_MAX);
+
+function release_shipping(int $id): void
+{
+    $order = wc_get_order($id);
+    if (!$order instanceof WC_Order || !$order->has_status([SHIPPING_HOLD])) {
+        return;
+    }
+    $state = (array) $order->get_meta(META);
+    if (!empty($state['hold_shipping']) && !shipping_locked($order, $state) && payment_ready($order, $state)) {
+        if (!$order->update_status('processing', 'BlockSign confirmation complete. Order released for shipping.')) {
+            throw new RuntimeException('Could not release the confirmed order for shipping.');
+        }
+    }
+}
+
 function payment_ready(WC_Order $order, array $state): bool
 {
     $total = (float) $order->get_total();
@@ -622,7 +703,8 @@ function payment_ready(WC_Order $order, array $state): bool
     return match ($timing) {
         'without_payment' => $total === 0.0,
         'after_payment', 'before_payment' => $total > 0.0 && $order->get_payment_method() !== 'cod'
-            && $order->is_paid() && $order->get_date_paid() !== null && (float) $order->get_total_refunded() === 0.0,
+            && ($order->is_paid() || (!empty($state['hold_shipping']) && $order->has_status([SHIPPING_HOLD])))
+            && $order->get_date_paid() !== null && (float) $order->get_total_refunded() === 0.0,
         default => false,
     };
 }
@@ -695,6 +777,9 @@ add_action(JOB, static function (int $id): void {
         try {
             $retry = advance($order, $state);
             $state = $order->get_meta(META);
+            if (!empty($state['hold_shipping']) && RequiredSignatures::complete($state)) {
+                release_shipping($id);
+            }
             if (defined('BLOCKSIGN_ESIGN_ARCHIVE') && BLOCKSIGN_ESIGN_ARCHIVE && RequiredSignatures::complete($state)) {
                 try {
                     $root = ($_SERVER['DOCUMENT_ROOT'] ?? '') ?: ABSPATH;
@@ -745,9 +830,12 @@ function show_order_state(WC_Order $order): void
     }
     if (!download_allowed($order, $state)) {
         echo ($state['timing'] ?? 'without_payment') !== 'without_payment' && !payment_ready($order, $state)
-            ? '<p>BlockSign: the download is locked while payment is unconfirmed.</p>'
-            : '<p>BlockSign: the download is locked until all required signatures and delivery confirmations are confirmed.</p>';
+            ? '<p>BlockSign: fulfillment is on hold while payment is unconfirmed.</p>'
+            : '<p>BlockSign: fulfillment is on hold until all required signatures and delivery confirmations are complete.</p>';
         return;
+    }
+    if (!empty($state['hold_shipping'])) {
+        echo '<p>BlockSign: all required confirmations are complete.</p>';
     }
     foreach (OrderFiles::downloads($state) as $product => $file) {
         $url = add_query_arg([
