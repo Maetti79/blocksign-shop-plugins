@@ -16,6 +16,8 @@ file_put_contents(BLOCKSIGN_ESIGN_FILES . '/download.pdf', '%PDF-mock download')
 register_shutdown_function(static function (): void {
     unlink(BLOCKSIGN_ESIGN_FILES . '/agreement.pdf');
     unlink(BLOCKSIGN_ESIGN_FILES . '/download.pdf');
+    unlink(BLOCKSIGN_ESIGN_FILES . '/custom-agreement.pdf');
+    unlink(BLOCKSIGN_ESIGN_FILES . '/custom-download.pdf');
     rmdir(BLOCKSIGN_ESIGN_FILES);
 });
 
@@ -109,6 +111,7 @@ function get_option(string $name, mixed $default = false): mixed
     };
 }
 
+function wp_unslash(string $value): string { return stripslashes($value); }
 function absint(int $value): int { return abs($value); }
 function is_email(string $value): bool { return filter_var($value, FILTER_VALIDATE_EMAIL) !== false; }
 function wp_doing_ajax(): bool { return true; }
@@ -351,3 +354,17 @@ $order = new WC_Order([]);
 $hooks['woocommerce_checkout_create_order']($order);
 check($order->state === [], 'unchecked product was still selected');
 echo "PASS WooCommerce product checkbox\n";
+
+file_put_contents(BLOCKSIGN_ESIGN_FILES . '/custom-agreement.pdf', '%PDF custom agreement');
+file_put_contents(BLOCKSIGN_ESIGN_FILES . '/custom-download.pdf', '%PDF custom download');
+$configured_scope = ['mode' => 'product', 'category_id' => 0];
+$_POST['_blocksign_esign_agreement_file'] = 'custom-agreement.pdf';
+$_POST['_blocksign_esign_download_file'] = 'custom-download.pdf';
+$hooks['woocommerce_admin_process_product_object']($product);
+unset($_POST['_blocksign_esign_agreement_file'], $_POST['_blocksign_esign_download_file']);
+$order = new WC_Order([]);
+$hooks['woocommerce_checkout_create_order']($order);
+check($order->state['documents'][0]['file'] === 'custom-agreement.pdf', 'custom agreement was not selected');
+check($order->state['download_file'] === 'custom-download.pdf' && $order->state['download_hash'] === hash('sha256', '%PDF custom download'),
+    'custom download was not pinned at checkout');
+echo "PASS WooCommerce product-specific PDFs\n";

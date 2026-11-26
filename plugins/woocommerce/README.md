@@ -24,7 +24,13 @@ Unter **Protected products** wählst du für welche Produkte die Einstellung gil
 - **Products marked on their edit screen** verwendet die Checkbox **Require BlockSign eSign** unter **Produktdaten → Allgemein** des klassischen WooCommerce-Produkteditors.
 - **All eligible virtual products** gilt für geeignete virtuelle Produkte im ganzen Shop. Produkte mit einem aktiven eigenen Shop-Download bleiben außerhalb dieser Auswahl.
 
-Alle erfassten Produkte verwenden dieselben Pflichtdokumente, dasselbe private `download.pdf` und denselben Zahlungsablauf der Modulkonfiguration. Eine Bestellung umfasst im Pilot genau ein Exemplar eines geschützten Produkts. Änderungen der Zuordnung gelten für neue Bestellungen.
+Die Modulkonfiguration gilt für alle erfassten Produkte. Das erste Pflichtdokument und der private Download können je Produkt abweichen. Eine Bestellung umfasst im Pilot genau ein Exemplar eines geschützten Produkts. Änderungen der Zuordnung gelten für neue Bestellungen.
+
+## Eigene PDFs je Produkt
+
+Trage im Produkteditor bei **BlockSign primary agreement PDF** und **BlockSign protected download PDF** die jeweiligen Dateinamen ein. Die Dateien müssen im privaten BlockSign-Verzeichnis liegen. Leere Felder verwenden `agreement.pdf` und `download.pdf`. Weitere Pflichtdokumente und die Signaturposition für das erste Dokument stammen aus der Modulkonfiguration.
+
+Neue Bestellungen speichern die Dateinamen und Dateihashes. Lass die zugehörigen Dateien für bestehende Bestellungen unverändert verfügbar. Für einen neuen Inhalt verwende einen neuen Dateinamen.
 
 ## Signaturniveau und Position
 
@@ -32,7 +38,7 @@ Das Modul bietet EES, FES und QES an. X und Y werden in PDF-Einheiten vom linken
 
 ## Mehrere Pflichtdokumente
 
-Das Modul verwendet `agreement.pdf` als erstes Pflichtdokument. Hinterlege weitere PDF-Dateien im selben privaten Verzeichnis und trage sie unter **Additional required PDFs** ein, eine pro Zeile.
+Standardmäßig verwendet das Modul `agreement.pdf` als erstes Pflichtdokument. Hinterlege weitere PDF-Dateien im selben privaten Verzeichnis und trage sie unter **Additional required PDFs** ein, eine pro Zeile.
 
 ```text
 mandate.pdf | EES | 1 | 50 | 50

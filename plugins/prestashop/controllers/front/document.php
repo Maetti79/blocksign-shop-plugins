@@ -47,7 +47,7 @@ class BlocksignEsignDocumentModuleFrontController extends ModuleFrontController
             if (!$allowed) {
                 $this->unavailable();
             }
-            $this->download($state['download_hash']);
+            $this->download($state['download_file'] ?? 'download.pdf', $state['download_hash']);
         }
 
         $url = $this->context->link->getModuleLink($this->module->name, 'document', [
@@ -78,10 +78,10 @@ class BlocksignEsignDocumentModuleFrontController extends ModuleFrontController
         exit('Download unavailable.');
     }
 
-    private function download(string $expectedHash): never
+    private function download(string $file, string $expectedHash): never
     {
         try {
-            $stream = fopen(BlocksignEsign::asset('download.pdf'), 'rb');
+            $stream = fopen(BlocksignEsign::asset($file), 'rb');
             if ($stream === false) {
                 $this->unavailable();
             }

@@ -4,10 +4,13 @@ use BlockSign\ESign\Client;
 use BlockSign\ESign\Gate;
 use BlockSign\ESign\EvidenceArchive;
 use BlockSign\ESign\ProductScope;
+use BlockSign\ESign\ProductFiles;
 use BlockSign\ESign\RequiredSignatures;
 use BlockSign\ESign\SignatureSettings;
 use BlockSign\ESign\SignatureWorkflow;
 use Symfony\Component\Form\Extension\Core\Type\CheckboxType;
+use Symfony\Component\Form\Extension\Core\Type\TextType;
+use Symfony\Component\Validator\Constraints\Regex;
 
 if (!defined('_PS_VERSION_')) {
     exit;
@@ -19,6 +22,7 @@ require_once __DIR__ . '/core/SignatureSettings.php';
 require_once __DIR__ . '/core/SignatureWorkflow.php';
 require_once __DIR__ . '/core/RequiredSignatures.php';
 require_once __DIR__ . '/core/ProductScope.php';
+require_once __DIR__ . '/core/ProductFiles.php';
 require_once __DIR__ . '/core/EvidenceArchive.php';
 
 class BlocksignEsign extends Module
@@ -27,13 +31,14 @@ class BlocksignEsign extends Module
     private const SCOPE = 'BLOCKSIGN_ESIGN_SCOPE';
     private const PRODUCT_FLAG = 'blocksign_esign_required';
     private const PRODUCT_FLAG_PREFIX = 'BLOCKSIGN_ESIGN_PRODUCT_FLAG_';
+    private const PRODUCT_FILES_PREFIX = 'BLOCKSIGN_ESIGN_PRODUCT_FILES_';
     private const SIGNATURE = 'BLOCKSIGN_ESIGN_SIGNATURE';
     private const DOCUMENTS = 'BLOCKSIGN_ESIGN_DOCUMENTS';
 
     public function __construct()
     {
         $this->name = 'blocksignesign';
-        $this->version = '0.6.0';
+        $this->version = '0.7.0';
         $this->author = 'BlockSign';
         $this->tab = 'administration';
         $this->ps_versions_compliancy = ['min' => '9.0.0', 'max' => _PS_VERSION_];
@@ -81,6 +86,17 @@ class BlocksignEsign extends Module
             'required' => false,
             'data' => self::productMarked($productId, $shopId),
         ]);
+        $files = self::productFiles($productId, $shopId);
+        foreach (ProductFiles::DEFAULTS as $kind => $default) {
+            $builder->get('options')->add('blocksign_esign_' . $kind . '_file', TextType::class, [
+                'label' => $kind === 'agreement' ? 'BlockSign primary agreement PDF' : 'BlockSign protected download PDF',
+                'help' => 'Private PDF filename. Leave blank to use ' . $default . '.',
+                'required' => false,
+                'empty_data' => '',
+                'data' => $files[$kind] ?? '',
+                'constraints' => [new Regex(pattern: ProductFiles::BASENAME_PATTERN)],
+            ]);
+        }
     }
 
     public function hookActionAfterUpdateProductFormHandler(array $params): void
@@ -95,6 +111,22 @@ class BlocksignEsign extends Module
         if (!Configuration::updateValue(self::PRODUCT_FLAG_PREFIX . $productId, (int) $flag, false, null, $shopId)) {
             throw new RuntimeException('Could not save the BlockSign product checkbox.');
         }
+        $files = self::productFiles($productId, $shopId);
+        foreach (array_keys(ProductFiles::DEFAULTS) as $kind) {
+            $value = $params['form_data']['options']['blocksign_esign_' . $kind . '_file'] ?? null;
+            if (is_string($value)) {
+                $files[$kind] = ProductFiles::validate($value);
+            }
+        }
+        if ($files && !Configuration::updateValue(self::PRODUCT_FILES_PREFIX . $productId, json_encode($files, JSON_THROW_ON_ERROR), false, null, $shopId)) {
+            throw new RuntimeException('Could not save the BlockSign product files.');
+        }
+    }
+
+    private static function productFiles(int $productId, int $shopId): array
+    {
+        $stored = Configuration::get(self::PRODUCT_FILES_PREFIX . $productId, null, null, $shopId);
+        return $stored ? json_decode($stored, true, 512, JSON_THROW_ON_ERROR) : [];
     }
 
     private function productEditorShop(): int
@@ -256,20 +288,15 @@ class BlocksignEsign extends Module
             }
 
             try {
-                $download = hash_file('sha256', self::asset('download.pdf'));
-                if (!$download) {
-                    throw new RuntimeException('Could not read the private files.');
-                }
-                $state = [
+                $state = ProductFiles::snapshot(
+                    self::productFiles($productId, $shopId),
+                    self::signatureSettings($shopId),
+                    RequiredSignatures::parseAdditional((string) Configuration::get(self::DOCUMENTS, null, null, $shopId)),
+                    self::asset(...)
+                ) + [
                     'product_id' => $productId,
                     'timing' => $timing,
-                    'download_hash' => $download,
                     'signer_email' => $customer->email,
-                    'documents' => RequiredSignatures::snapshot(
-                        self::signatureSettings((int) $order->id_shop),
-                        RequiredSignatures::parseAdditional((string) Configuration::get(self::DOCUMENTS, null, null, (int) $order->id_shop)),
-                        self::asset(...)
-                    ),
                 ];
                 $saved = Db::getInstance()->insert('blocksign_esign', [
                     'id_order' => (int) $order->id,

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BlockSign eSign for WooCommerce
  * Description: Release a free virtual product after BlockSign confirms its signature.
- * Version: 0.7.0
+ * Version: 0.8.0
  * Requires PHP: 8.1
  * Requires Plugins: woocommerce
  * License: GPL-3.0-or-later
@@ -16,6 +16,7 @@ use BlockSign\ESign\Client;
 use BlockSign\ESign\Gate;
 use BlockSign\ESign\EvidenceArchive;
 use BlockSign\ESign\ProductScope;
+use BlockSign\ESign\ProductFiles;
 use BlockSign\ESign\RequiredSignatures;
 use BlockSign\ESign\SignatureSettings;
 use BlockSign\ESign\SignatureWorkflow;
@@ -35,6 +36,7 @@ require_once __DIR__ . '/core/SignatureSettings.php';
 require_once __DIR__ . '/core/SignatureWorkflow.php';
 require_once __DIR__ . '/core/RequiredSignatures.php';
 require_once __DIR__ . '/core/ProductScope.php';
+require_once __DIR__ . '/core/ProductFiles.php';
 require_once __DIR__ . '/core/EvidenceArchive.php';
 
 const META = '_blocksign_esign';
@@ -157,6 +159,17 @@ add_action('woocommerce_product_options_general_product_data', static function (
         'value' => $product_object->get_meta(PRODUCT_FLAG) === 'yes' ? 'yes' : 'no',
         'wrapper_class' => 'show_if_simple',
     ]);
+    foreach (ProductFiles::DEFAULTS as $kind => $default) {
+        $key = '_blocksign_esign_' . $kind . '_file';
+        woocommerce_wp_text_input([
+            'id' => $key,
+            'label' => $kind === 'agreement' ? 'BlockSign primary agreement PDF' : 'BlockSign protected download PDF',
+            'placeholder' => $default,
+            'value' => $product_object->get_meta($key),
+            'description' => 'Private PDF filename. Leave blank to use the default.',
+            'wrapper_class' => 'show_if_simple',
+        ]);
+    }
 });
 
 add_action('woocommerce_admin_process_product_object', static function (WC_Product $product): void {
@@ -165,6 +178,18 @@ add_action('woocommerce_admin_process_product_object', static function (WC_Produ
         $product->update_meta_data(PRODUCT_FLAG, 'yes');
     } elseif ($value === 'no') {
         $product->delete_meta_data(PRODUCT_FLAG);
+    }
+    foreach (array_keys(ProductFiles::DEFAULTS) as $kind) {
+        $key = '_blocksign_esign_' . $kind . '_file';
+        if (!isset($_POST[$key]) || !is_string($_POST[$key])) {
+            continue;
+        }
+        try {
+            $file = ProductFiles::validate(wp_unslash($_POST[$key]));
+            $product->update_meta_data($key, $file);
+        } catch (InvalidArgumentException $error) {
+            \WC_Admin_Meta_Boxes::add_error($error->getMessage());
+        }
     }
 });
 
@@ -231,21 +256,19 @@ function snapshot(WC_Order $order): void
             throw new RuntimeException('BlockSign is not configured.');
         }
 
-        $download = hash_file('sha256', asset('download.pdf'));
-        if (!$download) {
-            throw new RuntimeException('BlockSign private files could not be read.');
-        }
-
-        $order->update_meta_data(META, [
+        $files = ProductFiles::snapshot(
+            [
+                'agreement' => $product->get_meta('_blocksign_esign_agreement_file'),
+                'download' => $product->get_meta('_blocksign_esign_download_file'),
+            ],
+            signature_settings(),
+            RequiredSignatures::parseAdditional(get_option('blocksign_esign_documents', '')),
+            asset(...)
+        );
+        $order->update_meta_data(META, $files + [
             'product_id' => $productId,
             'timing' => $timing,
-            'download_hash' => $download,
             'signer_email' => $order->get_billing_email(),
-            'documents' => RequiredSignatures::snapshot(
-                signature_settings(),
-                RequiredSignatures::parseAdditional(get_option('blocksign_esign_documents', '')),
-                asset(...)
-            ),
         ]);
         if ($timing === 'before_payment') {
             // Suppress gateway instructions until the buyer actually submits the order-pay form.
@@ -494,7 +517,7 @@ function download(): void
     }
 
     try {
-        $file = asset('download.pdf');
+        $file = asset($state['download_file'] ?? ProductFiles::DEFAULTS['download']);
         $stream = fopen($file, 'rb');
         if ($stream === false) {
             throw new RuntimeException('Download could not be opened.');

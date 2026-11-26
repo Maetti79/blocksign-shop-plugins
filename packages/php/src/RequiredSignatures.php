@@ -37,10 +37,10 @@ final class RequiredSignatures
         return $documents;
     }
 
-    public static function snapshot(array $primary, array $additional, Closure $locate): array
+    public static function snapshot(array $primary, array $additional, Closure $locate, string $primaryFile = 'agreement.pdf'): array
     {
         $documents = [];
-        foreach (['agreement.pdf' => $primary] + $additional as $file => $placement) {
+        foreach ([$primaryFile => $primary] + $additional as $file => $placement) {
             $hash = hash_file('sha256', $locate($file));
             if ($hash === false) {
                 throw new RuntimeException('Could not read a required BlockSign document.');

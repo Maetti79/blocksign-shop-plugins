@@ -19,6 +19,8 @@ register_shutdown_function(static function () use ($files): void {
     unlink($files . '/agreement.pdf');
     unlink($files . '/download.pdf');
     unlink($files . '/mandate.pdf');
+    unlink($files . '/custom-agreement.pdf');
+    unlink($files . '/custom-download.pdf');
     rmdir($files);
 });
 
@@ -49,7 +51,7 @@ class Configuration
 {
     public static array $productFlags = [];
 
-    public static function updateValue(string $key, int $value, bool $html, ?int $group, int $shop): bool
+    public static function updateValue(string $key, int|string $value, bool $html, ?int $group, int $shop): bool
     {
         self::$productFlags[$shop][$key] = $value;
         return true;
@@ -57,7 +59,7 @@ class Configuration
 
     public static function get(string $key, ...$context): int|string
     {
-        if (str_starts_with($key, 'BLOCKSIGN_ESIGN_PRODUCT_FLAG_')) {
+        if (str_starts_with($key, 'BLOCKSIGN_ESIGN_PRODUCT_FLAG_') || str_starts_with($key, 'BLOCKSIGN_ESIGN_PRODUCT_FILES_')) {
             return self::$productFlags[$context[2]][$key] ?? 0;
         }
         return match ($key) {
@@ -283,6 +285,13 @@ check(Db::$row === [], 'unmarked product was selected');
 $module->hookActionAfterUpdateProductFormHandler([
     'id' => 99, 'form_data' => ['options' => ['blocksign_esign_required' => true]],
 ]);
+class TestRegex
+{
+    public function __construct(string $pattern)
+    {
+    }
+}
+class_alias(TestRegex::class, 'Symfony\Component\Validator\Constraints\Regex');
 $builder = new class {
     public array $checkbox = [];
     public function has(string $name): bool { return $name === 'options'; }
@@ -301,3 +310,21 @@ Db::$row = [];
 $module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
 check(Db::$row === [], 'unchecked product was still selected');
 echo "PASS PrestaShop product checkbox and upgrade\n";
+
+file_put_contents($files . '/custom-agreement.pdf', '%PDF custom agreement');
+file_put_contents($files . '/custom-download.pdf', '%PDF custom download');
+$module->hookActionAfterUpdateProductFormHandler([
+    'id' => 99,
+    'form_data' => ['options' => [
+        'blocksign_esign_required' => true,
+        'blocksign_esign_agreement_file' => 'custom-agreement.pdf',
+        'blocksign_esign_download_file' => 'custom-download.pdf',
+    ]],
+]);
+$module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
+$state = json_decode(Db::$row['state'], true);
+check($state['documents'][0]['file'] === 'custom-agreement.pdf', 'custom agreement was not selected');
+check($state['documents'][1]['file'] === 'mandate.pdf', 'additional documents were lost');
+check($state['download_file'] === 'custom-download.pdf' && $state['download_hash'] === hash('sha256', '%PDF custom download'),
+    'custom download was not pinned at checkout');
+echo "PASS PrestaShop product-specific PDFs\n";
