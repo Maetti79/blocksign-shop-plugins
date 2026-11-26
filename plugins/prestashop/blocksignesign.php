@@ -25,7 +25,7 @@ class BlocksignEsign extends Module
     public function __construct()
     {
         $this->name = 'blocksignesign';
-        $this->version = '0.2.0';
+        $this->version = '0.3.0';
         $this->author = 'BlockSign';
         $this->tab = 'administration';
         $this->ps_versions_compliancy = ['min' => '9.0.0', 'max' => _PS_VERSION_];
@@ -102,7 +102,7 @@ class BlocksignEsign extends Module
                 'type' => 'text',
                 'name' => self::PRODUCT,
                 'label' => 'Protected product ID',
-                'desc' => 'Use a free virtual product with no native download or attachment. Enter 0 to disable new requests.',
+                'desc' => 'Use a virtual product with no native download or attachment. Enter 0 to disable new requests.',
             ], [
                 'type' => 'select',
                 'name' => 'blocksign_level',
@@ -139,7 +139,9 @@ class BlocksignEsign extends Module
     {
         foreach ($params['orders'] ?? [] as $order) {
             $productId = (int) Configuration::get(self::PRODUCT, null, null, (int) $order->id_shop);
-            if (!$productId || $order->module !== 'free_order' || (float) $order->total_paid_tax_incl !== 0.0) {
+            $total = (float) $order->total_paid_tax_incl;
+            $timing = $total > 0.0 ? 'after_payment' : 'without_payment';
+            if (!$productId || !self::matchesTiming($order, $timing)) {
                 continue;
             }
             $items = $order->getProductsDetail();
@@ -161,6 +163,7 @@ class BlocksignEsign extends Module
                 }
                 $state = [
                     'product_id' => $productId,
+                    'timing' => $timing,
                     'download_hash' => $download,
                     'signer_email' => $customer->email,
                     'documents' => RequiredSignatures::snapshot(
@@ -226,8 +229,7 @@ class BlocksignEsign extends Module
 
     public static function orderEligible(Order $order, array $state): bool
     {
-        if (!Validate::isLoadedObject($order) || $order->module !== 'free_order'
-            || (float) $order->total_paid_tax_incl !== 0.0) {
+        if (!Validate::isLoadedObject($order) || !self::matchesTiming($order, $state['timing'] ?? 'without_payment')) {
             return false;
         }
         foreach (['PS_OS_CANCELED', 'PS_OS_REFUND', 'PS_OS_ERROR'] as $key) {
@@ -241,10 +243,29 @@ class BlocksignEsign extends Module
             && (int) $item['product_quantity'] === 1 && (int) $item['product_quantity_refunded'] === 0;
     }
 
+    private static function matchesTiming(Order $order, string $timing): bool
+    {
+        $total = (float) $order->total_paid_tax_incl;
+        return match ($timing) {
+            'without_payment' => $total === 0.0 && $order->module === 'free_order',
+            'after_payment' => $total > 0.0 && !in_array($order->module, ['free_order', 'ps_cashondelivery', 'cashondelivery'], true),
+            default => false,
+        };
+    }
+
+    public static function paymentReady(Order $order, array $state): bool
+    {
+        if (($state['timing'] ?? 'without_payment') === 'without_payment') {
+            return true;
+        }
+        $status = $order->getCurrentOrderState();
+        return $status && (bool) $status->paid;
+    }
+
     public static function downloadAllowed(Order $order, array $state): bool
     {
-        return self::orderEligible($order, $state)
-            && Gate::allows('fulfillment', [['timing' => 'without_payment', 'completed' => RequiredSignatures::complete($state)]]);
+        return self::orderEligible($order, $state) && self::paymentReady($order, $state)
+            && Gate::allows('fulfillment', [['timing' => $state['timing'] ?? 'without_payment', 'completed' => RequiredSignatures::complete($state)]]);
     }
 
     public static function asset(string $name): string
@@ -311,7 +332,10 @@ class BlocksignEsign extends Module
                 'SELECT q.id_order FROM `' . _DB_PREFIX_ . 'blocksign_esign` q
                 INNER JOIN `' . _DB_PREFIX_ . 'module_shop` ms ON ms.id_shop = q.id_shop
                 INNER JOIN `' . _DB_PREFIX_ . "module` m ON m.id_module = ms.id_module AND m.name = 'blocksignesign'
-                WHERE q.next_attempt BETWEEN 1 AND " . time() . ' ORDER BY q.next_attempt, q.id_order LIMIT 20',
+                INNER JOIN `" . _DB_PREFIX_ . "orders` o ON o.id_order = q.id_order AND o.id_shop = q.id_shop
+                LEFT JOIN `" . _DB_PREFIX_ . "order_state` os ON os.id_order_state = o.current_state
+                WHERE ((o.total_paid_tax_incl = 0 AND o.module = 'free_order') OR (o.total_paid_tax_incl > 0 AND os.paid = 1))
+                AND q.next_attempt BETWEEN 1 AND " . time() . ' ORDER BY q.next_attempt, q.id_order LIMIT 20',
                 true,
                 false
             );
@@ -331,10 +355,22 @@ class BlocksignEsign extends Module
         }
         $order = new Order($id);
         $state = json_decode($row['state'], true, 512, JSON_THROW_ON_ERROR);
+        $validOrder = (int) $row['id_shop'] === (int) $order->id_shop && self::orderEligible($order, $state);
+        if ($validOrder && !self::paymentReady($order, $state)) {
+            return;
+        }
+
         $retry = false;
-        if ((int) $row['id_shop'] === (int) $order->id_shop
-            && self::orderEligible($order, $state) && !RequiredSignatures::complete($state)
-            && !RequiredSignatures::needsReview($state) && time() - (int) $row['created_at'] < 604800) {
+        $started = $state['started_at'] ?? (int) $row['created_at'];
+        if ($validOrder && !RequiredSignatures::complete($state) && !RequiredSignatures::needsReview($state)) {
+            if (($state['timing'] ?? '') === 'after_payment' && !isset($state['started_at'])) {
+                $started = $state['started_at'] = time();
+                self::updateRow($id, ['state' => pSQL(json_encode($state, JSON_THROW_ON_ERROR), true)]);
+            }
+            if (time() - $started >= 604800) {
+                self::updateRow($id, ['next_attempt' => 0]);
+                return;
+            }
             try {
                 $retry = RequiredSignatures::advance(
                     $workflow,

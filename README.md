@@ -1,11 +1,11 @@
 # BlockSign eSign für Shops
 
-Zwei Pakete teilen die Freigaberegeln. Das PHP-Paket enthält zusätzlich den ersten BlockSign-REST-Client. Die Piloten für WooCommerce und PrestaShop verarbeiten kostenlose Bestellungen für geschützte PDFs. Die gemeinsamen Testdaten prüfen auch die Entscheidung vor Bestellung, vor Zahlung und nach Zahlung. Die dazugehörigen bezahlten Abläufe, Zustellnachweise und weitere Shop-Adapter sind zukünftige Ausbaustufen.
+Zwei Pakete teilen die Freigaberegeln. Das PHP-Paket enthält zusätzlich den ersten BlockSign-REST-Client. Die Piloten für WooCommerce und PrestaShop verarbeiten kostenlose und bezahlte Bestellungen für geschützte PDFs. Bei bezahlten Bestellungen beginnt der Signaturvorgang nach der Zahlungsbestätigung. Die gemeinsame Testsuite enthält auch die Freigaberegeln für vor der Zahlung erforderliche Unterschriften. Die entsprechenden Checkout-Sperren, Zustellnachweise und weitere Shop-Adapter sind zukünftige Ausbaustufen.
 
 ## WooCommerce-Pilot
 
 1. Baue die Plugin-ZIP mit `scripts/build-woocommerce.sh`. Lade `build/blocksign-esign-woocommerce.zip` unter **Plugins → Installieren → Plugin hochladen** hoch und aktiviere das Plugin.
-2. Lege ein einfaches **virtuelles** Produkt mit Preis **0 €** an. WooCommerces Standard-Downloadfunktion bleibt für dieses Produkt ausgeschaltet.
+2. Lege ein einfaches **virtuelles** Produkt mit gewünschtem Preis an. WooCommerces Standard-Downloadfunktion bleibt für dieses Produkt ausgeschaltet.
 3. Kopiere die Erklärung als `agreement.pdf` und das Exposé als `download.pdf` in ein Verzeichnis außerhalb des Webroots, das der PHP-Prozess lesen kann und das der Webserver auch über Aliase nicht veröffentlicht. Die Erklärung braucht Platz für das Signaturfeld an der im nächsten Schritt konfigurierten Position.
 4. Setze in `wp-config.php` die Konstanten `BLOCKSIGN_ESIGN_FILES` (absoluter Verzeichnispfad) und `BLOCKSIGN_ESIGN_API_KEY` (API-Key aus einer serverseitigen Secret-Konfiguration).
 5. Trage die Produkt-ID unter **Einstellungen → BlockSign eSign** ein und wähle Signaturniveau, Seite und Position. Das Produkt wird einzeln und mit einer gültigen E-Mail-Adresse bestellt.
@@ -21,7 +21,7 @@ Führe in einem Testshop eine Gast- und eine Kontobestellung durch. Prüfe die S
 ## PrestaShop-Pilot
 
 1. Erstelle die Modul-ZIP mit `scripts/build-prestashop.sh` oder lade das Artefakt aus GitHub Actions herunter. Installiere darin `blocksign-esign-prestashop.zip` über den Modulmanager eines **PrestaShop-9-Testshops**.
-2. Lege ein einzelnes virtuelles Produkt für **0 €** an. Hinterlege dafür weder einen PrestaShop-Download noch einen öffentlich erreichbaren Anhang. Trage die Produkt-ID in der Modulkonfiguration ein. Der Pilot verarbeitet eine kostenlose Bestellung mit genau einem Exemplar dieses Produkts.
+2. Lege ein einzelnes virtuelles Produkt mit gewünschtem Preis an. Hinterlege dafür weder einen PrestaShop-Download noch einen öffentlich erreichbaren Anhang. Trage die Produkt-ID in der Modulkonfiguration ein. Der Pilot verarbeitet Bestellungen mit genau einem Exemplar dieses Produkts.
 3. Lege `agreement.pdf` und `download.pdf` in einem privaten Verzeichnis außerhalb des Webroots ab. Setze `BLOCKSIGN_ESIGN_FILES` auf diesen absoluten Pfad, sowohl für den Web-PHP-Prozess als auch für den Worker. Wähle in der Modulkonfiguration außerdem Signaturniveau, PDF-Seite und Position.
 4. Stelle dem Worker `BLOCKSIGN_ESIGN_API_KEY` über die Secret-Konfiguration des Servers bereit. Lasse jede Minute `php /pfad/zum/shop/modules/blocksignesign/worker.php` unter dem Shop-Benutzer laufen. Das CLI-PHP benötigt cURL.
 
@@ -30,6 +30,14 @@ PrestaShop zeigt den Statuslink auf der Bestellbestätigung und in der Bestellan
 Der Worker verarbeitet bis zu 20 fällige Vorgänge pro Lauf. Er lädt die Erklärung hoch, sendet die BlockSign-Einladung und fragt den Status bis zu sieben Tage ab. Bei einem unklaren Ergebnis der Erstellung hält er den betroffenen Vorgang an und protokolliert den Fall. Ersetze die privaten Pilotdateien bei offenen oder weiterhin abrufbaren Bestellungen nur durch Dateien mit identischem Inhalt. Deaktivieren oder Deinstallieren des Moduls unterbricht den Zugriff. Beim Deinstallieren bleibt die Statustabelle für bestehende Nachweise erhalten.
 
 Im Testshop sind insbesondere Modulinstallation, normaler und Gast-Checkout, E-Mail-Einladung, Statuslink, Download-Sperre und anschließende Freigabe mit einem BlockSign-Testkonto zu prüfen. Die CI deckt Registrierung, Signaturablauf und Freigabeentscheidung mit simulierten Abhängigkeiten ab. Zusätzlich wurden Modulinstallation, Bestellregistrierung, Worker-Start und HTTP-Download vor und nach einer simulierten Signatur mit PrestaShop 9.0.0 und MariaDB 10.11 geprüft.
+
+## Signatur nach Zahlung
+
+Hat die Bestellung einen positiven Gesamtbetrag, wartet der Shop auf die Zahlungsbestätigung. Bei 0 € bleibt der bestehende Ablauf erhalten. Verwende für bezahlte Produkte eine Zahlungsart, die erst nach Zahlungseingang einen bezahlten Status setzt. Die Standard-Nachnahme wird für diese Downloads nicht unterstützt und sollte für das Produkt im Shop deaktiviert sein.
+
+WooCommerce reagiert auf Zahlungsbestätigung und Statuswechsel. Der Vorgang verlangt einen bezahlten Status und ein Zahlungsdatum. Auch wenn nur ein Teilbetrag erstattet wurde, bleibt der Download gesperrt. PrestaShop verarbeitet eine bezahlte Bestellung ab dem nächsten Worker-Lauf, sobald der aktuelle Bestellstatus als bezahlt gilt. Stornierte und erstattete Bestellungen sowie Positionen mit erstatteter Stückzahl bleiben gesperrt.
+
+Teste mit einer verzögerten Zahlung und zwei Pflichtdokumenten. Vor der Zahlungsbestätigung darf keine Signaturanfrage starten. Nach der Zahlung bleibt das PDF bis zur zweiten Unterschrift gesperrt. Prüfe anschließend den Download und die erneute Sperre nach Stornierung oder Erstattung. Die neuen Zahlungsabläufe sind in der CI mit simulierten Shop- und BlockSign-Antworten geprüft.
 
 ## Signaturniveau und Position
 

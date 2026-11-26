@@ -61,6 +61,10 @@ class BlocksignEsignDocumentModuleFrontController extends ModuleFrontController
                 ? 'Your download will be available here after all required signatures are confirmed. Check your email for the invitations and reload this page after signing.'
                 : 'The download is locked. Contact the shop for help with this order.');
 
+        if (!BlocksignEsign::paymentReady($order, $state)) {
+            $message = 'The download is locked while payment is unconfirmed.';
+        }
+
         header('Content-Type: text/html; charset=UTF-8');
         echo '<!DOCTYPE html><html lang="en"><meta charset="utf-8"><title>BlockSign</title>'
             . '<main><h1>Signature and download</h1><p>' . $message . '</p></main></html>';

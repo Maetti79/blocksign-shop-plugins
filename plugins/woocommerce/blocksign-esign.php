@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BlockSign eSign for WooCommerce
  * Description: Release a free virtual product after BlockSign confirms its signature.
- * Version: 0.2.0
+ * Version: 0.3.0
  * Requires PHP: 8.1
  * Requires Plugins: woocommerce
  * License: GPL-3.0-or-later
@@ -132,11 +132,18 @@ function snapshot(WC_Order $order): void
         $product = $item->get_product();
         if (!$product instanceof WC_Product || !$product->is_type('simple') || !$product->is_virtual()
             || $product->is_downloadable() || count($items) !== 1 || $item->get_quantity() !== 1
-            || (float) $order->get_total() !== 0.0 || !is_email($order->get_billing_email())) {
-            throw new RuntimeException('The protected product must be ordered alone as a free virtual item with a valid email address.');
+            || (float) $order->get_total() < 0.0 || !is_email($order->get_billing_email())) {
+            throw new RuntimeException('The protected product must be ordered alone as a virtual item with a valid email address.');
         }
 
+        $timing = (float) $order->get_total() > 0.0 ? 'after_payment' : 'without_payment';
+        if ($timing === 'after_payment' && $order->get_payment_method() === 'cod') {
+            throw new RuntimeException('Cash on delivery is unavailable for the protected PDF.');
+        }
         if ($existing) {
+            if (($existing['timing'] ?? 'without_payment') !== $timing) {
+                throw new RuntimeException('The protected order payment requirement cannot be changed.');
+            }
             if (strcasecmp($existing['signer_email'], $order->get_billing_email()) !== 0) {
                 throw new RuntimeException('The protected order email cannot be changed.');
             }
@@ -154,6 +161,7 @@ function snapshot(WC_Order $order): void
 
         $order->update_meta_data(META, [
             'product_id' => $productId,
+            'timing' => $timing,
             'download_hash' => $download,
             'signer_email' => $order->get_billing_email(),
             'documents' => RequiredSignatures::snapshot(
@@ -184,7 +192,8 @@ add_action('woocommerce_store_api_checkout_order_processed', static function (WC
 
 function enqueue(WC_Order $order): void
 {
-    if ($order->get_meta(META)) {
+    $state = $order->get_meta(META);
+    if ($state && payment_ready($order, $state) && !RequiredSignatures::complete($state)) {
         as_enqueue_async_action(JOB, [$order->get_id()], GROUP, true);
     }
 }
@@ -192,6 +201,28 @@ function enqueue(WC_Order $order): void
 add_action('woocommerce_checkout_order_processed', static function (int $id, array $data, WC_Order $order): void {
     enqueue($order);
 }, 10, 3);
+
+function enqueue_paid_order(int $id): void
+{
+    $order = wc_get_order($id);
+    if ($order && ($order->get_meta(META)['timing'] ?? '') === 'after_payment') {
+        enqueue($order);
+    }
+}
+
+add_action('woocommerce_payment_complete', __NAMESPACE__ . '\enqueue_paid_order');
+add_action('woocommerce_order_status_changed', __NAMESPACE__ . '\enqueue_paid_order');
+
+function payment_ready(WC_Order $order, array $state): bool
+{
+    $total = (float) $order->get_total();
+    return match ($state['timing'] ?? 'without_payment') {
+        'without_payment' => $total === 0.0,
+        'after_payment' => $total > 0.0 && $order->get_payment_method() !== 'cod'
+            && $order->is_paid() && $order->get_date_paid() !== null && (float) $order->get_total_refunded() === 0.0,
+        default => false,
+    };
+}
 
 function client(): Client
 {
@@ -230,6 +261,10 @@ function persist(WC_Order $order, array $state): void
 
 function advance(WC_Order $order, array $state): bool
 {
+    if (!payment_ready($order, $state)) {
+        return false;
+    }
+
     return RequiredSignatures::advance(
         new SignatureWorkflow(client()),
         $state,
@@ -261,7 +296,8 @@ add_action(JOB, static function (int $id): void {
             }
         }
 
-        if ($retry && time() - $order->get_date_created()->getTimestamp() < WEEK_IN_SECONDS) {
+        $since = ($state['timing'] ?? '') === 'after_payment' ? $order->get_date_paid() : $order->get_date_created();
+        if ($retry && $since && time() - $since->getTimestamp() < WEEK_IN_SECONDS) {
             as_schedule_single_action(time() + 120, JOB, [$id], GROUP);
         }
     } finally {
@@ -271,8 +307,8 @@ add_action(JOB, static function (int $id): void {
 
 function download_allowed(WC_Order $order, array $state): bool
 {
-    return $state && !$order->has_status(['cancelled', 'refunded', 'failed', 'checkout-draft'])
-        && Gate::allows('fulfillment', [['timing' => 'without_payment', 'completed' => RequiredSignatures::complete($state)]]);
+    return $state && payment_ready($order, $state) && !$order->has_status(['cancelled', 'refunded', 'failed', 'checkout-draft'])
+        && Gate::allows('fulfillment', [['timing' => $state['timing'] ?? 'without_payment', 'completed' => RequiredSignatures::complete($state)]]);
 }
 
 add_action('woocommerce_order_details_after_order_table', static function (WC_Order $order): void {
@@ -281,7 +317,9 @@ add_action('woocommerce_order_details_after_order_table', static function (WC_Or
         return;
     }
     if (!download_allowed($order, $state)) {
-        echo '<p>BlockSign: the download is locked until all required signatures are confirmed.</p>';
+        echo ($state['timing'] ?? '') === 'after_payment' && !payment_ready($order, $state)
+            ? '<p>BlockSign: the download is locked while payment is unconfirmed.</p>'
+            : '<p>BlockSign: the download is locked until all required signatures are confirmed.</p>';
         return;
     }
     $url = add_query_arg([

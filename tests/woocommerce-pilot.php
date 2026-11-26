@@ -19,6 +19,19 @@ register_shutdown_function(static function (): void {
 
 class WC_Order
 {
+    public float $total = 0;
+    public float $refunded = 0;
+    public bool $paid = false;
+    public ?DateTimeImmutable $paidAt = null;
+
+    public function get_total(): float { return $this->total; }
+    public function get_total_refunded(): float { return $this->refunded; }
+    public function is_paid(): bool { return $this->paid; }
+    public function get_date_paid(): ?DateTimeImmutable { return $this->paidAt; }
+    public function get_payment_method(): string { return 'stripe'; }
+    public function get_id(): int { return 42; }
+    public function get_meta(string $key): array { return $this->state; }
+
     public function __construct(public array $state)
     {
     }
@@ -38,8 +51,21 @@ class WC_Order
     }
 }
 
-function add_action(...$args): void
+function add_action(string $hook, callable $callback, int $priority = 10, int $args = 1): void
 {
+    $GLOBALS['hooks'][$hook] = $callback;
+}
+
+function wc_get_order(int $id): WC_Order
+{
+    check($id === 42, 'unexpected order ID');
+    return $GLOBALS['order'];
+}
+
+function as_enqueue_async_action(string $hook, array $args, string $group, bool $unique): void
+{
+    check($unique && $args === [42], 'paid order must enqueue a unique action');
+    $GLOBALS['queued'][$hook] = $args;
 }
 
 function is_wp_error(array $response): bool
@@ -116,3 +142,29 @@ check(!advance($order, $order->state), 'completed signature should stop polling'
 check(download_allowed($order, $order->state), 'signed download should unlock');
 check($responses === [], 'unused API responses');
 echo "PASS WooCommerce pilot with mocked BlockSign API\n";
+
+$order->state = [
+    'timing' => 'after_payment',
+    'phase' => 'upload',
+    'completed' => false,
+    'signer_email' => $signer,
+    'agreement_hash' => hash('sha256', '%PDF-mock agreement'),
+];
+$order->total = 10;
+$queued = [];
+$hooks['woocommerce_checkout_order_processed'](42, [], $order);
+check($queued === [], 'unpaid checkout enqueued a signature');
+check(!advance($order, $order->state), 'unpaid order should not reach BlockSign');
+
+$order->paid = true;
+$hooks['woocommerce_order_status_changed'](42);
+check($queued === [], 'paid status without a payment date enqueued a signature');
+$order->paidAt = new DateTimeImmutable();
+$hooks['woocommerce_payment_complete'](42);
+check(count($queued) === 1, 'confirmed payment did not enqueue the signature');
+check(!download_allowed($order, $order->state), 'payment alone released the download');
+$order->state['completed'] = true;
+check(download_allowed($order, $order->state), 'paid and signed download remains locked');
+$order->refunded = 1;
+check(!download_allowed($order, $order->state), 'a refund did not revoke the download');
+echo "PASS WooCommerce payment and download gates\n";

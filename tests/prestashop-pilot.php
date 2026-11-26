@@ -49,12 +49,24 @@ class Order
 {
     public int $id_shop = 2;
     public int $id_customer = 81;
+    public static bool $paid = false;
+    public static bool $paidOrder = false;
     public int $current_state = 2;
+
+    public function getCurrentOrderState(): object
+    {
+        return (object) ['paid' => self::$paid];
+    }
+
     public string $module = 'free_order';
     public string $total_paid_tax_incl = '0.000000';
 
     public function __construct(public int $id)
     {
+        if (self::$paidOrder) {
+            $this->module = 'ps_checkpayment';
+            $this->total_paid_tax_incl = '10.000000';
+        }
     }
 
     public function getProductsDetail(): array
@@ -133,7 +145,8 @@ $order->total_paid_tax_incl = '10.000000';
 $module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
 check(Db::$row === [], 'paid order should not be registered');
 
-$order->total_paid_tax_incl = '0.000000';
+Order::$paidOrder = true;
+$order = new Order(42);
 $module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
 $row = Db::$row;
 $module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
@@ -173,6 +186,11 @@ $workflow = new SignatureWorkflow(new Client(static function (string $method, st
         ],
     };
 }));
+$before = Db::$row;
+BlocksignEsign::processOrder(42, $workflow);
+check($uploads === 0 && Db::$row === $before, 'unpaid order must wait untouched for payment');
+Order::$paid = true;
+check(!BlocksignEsign::downloadAllowed($order, json_decode(Db::$row['state'], true)), 'payment alone unlocked the download');
 BlocksignEsign::processOrder(42, $workflow);
 $state = json_decode(Db::$row['state'], true);
 check($state['documents'][0]['completed'] && !$state['documents'][1]['completed'], 'each signature must be tracked separately');
@@ -186,6 +204,9 @@ $state = json_decode(Db::$row['state'], true);
 check($uploads === 2, 'expected exactly two uploads');
 check(BlocksignEsign::downloadAllowed($order, $state), 'signed download remains locked');
 check(Db::$row['next_attempt'] === 0, 'completed workflow should stop polling');
+Order::$paid = false;
+check(!BlocksignEsign::downloadAllowed($order, $state), 'unconfirmed payment must keep a signed download locked');
+Order::$paid = true;
 $order->current_state = 6;
 check(!BlocksignEsign::downloadAllowed($order, $state), 'cancelled order remained eligible');
 echo "PASS PrestaShop pilot with mocked BlockSign API\n";
