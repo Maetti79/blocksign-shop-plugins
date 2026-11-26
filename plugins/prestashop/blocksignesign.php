@@ -10,6 +10,7 @@ use BlockSign\ESign\CategoryDocuments;
 use BlockSign\ESign\RequiredSignatures;
 use BlockSign\ESign\SignatureSettings;
 use BlockSign\ESign\SignatureWorkflow;
+use BlockSign\ESign\ShopConfiguration;
 use PrestaShop\PrestaShop\Core\Module\Exception\ModuleErrorException;
 use Symfony\Component\Form\Extension\Core\Type\CheckboxType;
 use Symfony\Component\Form\Extension\Core\Type\TextType;
@@ -29,6 +30,7 @@ require_once __DIR__ . '/core/ProductFiles.php';
 require_once __DIR__ . '/core/OrderFiles.php';
 require_once __DIR__ . '/core/CategoryDocuments.php';
 require_once __DIR__ . '/core/EvidenceArchive.php';
+require_once __DIR__ . '/core/ShopConfiguration.php';
 
 class BlocksignEsign extends Module
 {
@@ -48,11 +50,12 @@ class BlocksignEsign extends Module
     private const SIGNATURE = 'BLOCKSIGN_ESIGN_SIGNATURE';
     private const DOCUMENTS = 'BLOCKSIGN_ESIGN_DOCUMENTS';
     private const CATEGORY_DOCUMENTS = 'BLOCKSIGN_ESIGN_CATEGORY_DOCUMENTS';
+    private const CONNECTION = 'BLOCKSIGN_ESIGN_CONNECTION';
 
     public function __construct()
     {
         $this->name = 'blocksignesign';
-        $this->version = '0.12.0';
+        $this->version = '0.13.0';
         $this->author = 'BlockSign';
         $this->tab = 'administration';
         $this->ps_versions_compliancy = ['min' => '9.0.0', 'max' => _PS_VERSION_];
@@ -265,6 +268,8 @@ class BlocksignEsign extends Module
     public function getContent()
     {
         $output = '';
+        $canManageConnection = $this->context->employee?->isSuperAdmin() ?? false;
+        $connection = $canManageConnection ? self::connection() : [];
         if (Tools::isSubmit('submitBlocksignEsign')) {
             $productId = filter_var(Tools::getValue(self::PRODUCT), FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
             try {
@@ -291,6 +296,9 @@ class BlocksignEsign extends Module
                     throw new InvalidArgumentException('Enter one category document per line.');
                 }
                 CategoryDocuments::parse($categoryDocuments);
+                $credentials = $_POST['blocksign_connection'] ?? null;
+                $newConnection = $canManageConnection && is_array($credentials)
+                    ? ShopConfiguration::credentials($credentials, $connection['key'] ?? '', [_PS_ROOT_DIR_, $_SERVER['DOCUMENT_ROOT'] ?? '']) : null;
                 if (!Configuration::updateValue(self::PREORDER, Tools::getValue('blocksign_preorder') === '1' ? 1 : 0)
                     || !Configuration::updateValue(self::SCOPE, json_encode($scope, JSON_THROW_ON_ERROR))
                     || !Configuration::updateValue(self::DOCUMENTS, trim($documents))
@@ -298,6 +306,12 @@ class BlocksignEsign extends Module
                     || !Configuration::updateValue(self::SIGNATURE, json_encode($placement, JSON_THROW_ON_ERROR))
                     || !Configuration::updateValue(self::PRODUCT, $productId)) {
                     throw new RuntimeException('Could not save the BlockSign settings.');
+                }
+                if ($newConnection !== null) {
+                    if (!Configuration::updateGlobalValue(self::CONNECTION, json_encode($newConnection, JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP))) {
+                        throw new RuntimeException('Could not save the BlockSign connection.');
+                    }
+                    $connection = $newConnection;
                 }
                 $output = $this->displayConfirmation('Settings saved.');
             } catch (RuntimeException | InvalidArgumentException $error) {
@@ -312,7 +326,30 @@ class BlocksignEsign extends Module
         $form->submit_action = 'submitBlocksignEsign';
         $settings = self::signatureSettings();
         $scope = self::productScope();
+        $connectionFields = $canManageConnection ? [[
+            'type' => 'password',
+            'name' => 'blocksign_connection[key]',
+            'label' => 'BlockSign API key (all shops)',
+            'desc' => getenv('BLOCKSIGN_ESIGN_API_KEY') ? 'Server-managed key takes precedence.'
+                : (!empty($connection['key']) ? 'Key saved. Leave blank to keep it.' : 'No key saved.'),
+        ], [
+            'type' => 'switch',
+            'name' => 'blocksign_connection[remove_key]',
+            'label' => 'Remove the saved API key',
+            'values' => [
+                ['id' => 'blocksign_key_remove', 'value' => 1, 'label' => 'Yes'],
+                ['id' => 'blocksign_key_keep', 'value' => 0, 'label' => 'No'],
+            ],
+        ], [
+            'type' => 'text',
+            'name' => 'blocksign_connection[directory]',
+            'label' => 'Private PDF directory (all shops)',
+            'desc' => getenv('BLOCKSIGN_ESIGN_FILES') ? 'Server-managed directory takes precedence.' : 'Absolute path outside the web root.',
+        ]] : [];
         $form->fields_value = [
+            'blocksign_connection[key]' => '',
+            'blocksign_connection[remove_key]' => 0,
+            'blocksign_connection[directory]' => $connection['directory'] ?? '',
             self::PRODUCT => (int) Configuration::get(self::PRODUCT),
             'blocksign_scope' => $scope['mode'],
             'blocksign_preorder' => (int) Configuration::get(self::PREORDER),
@@ -326,7 +363,7 @@ class BlocksignEsign extends Module
         ];
         return $output . $form->generateForm([['form' => [
             'legend' => ['title' => 'BlockSign eSign'],
-            'input' => [[
+            'input' => array_merge($connectionFields, [[
                 'type' => 'switch',
                 'name' => 'blocksign_preorder',
                 'label' => 'Require confirmation before order and payment',
@@ -382,9 +419,14 @@ class BlocksignEsign extends Module
                 'label' => 'Additional PDFs by product category',
                 'desc' => 'Example: 21 | mandate.pdf | EES | 1 | 50 | 50',
                 'rows' => 5,
-            ]],
+            ]]),
             'submit' => ['title' => 'Save'],
         ]]]);
+    }
+
+    private static function connection(): array
+    {
+        return (array) json_decode((string) Configuration::getGlobalValue(self::CONNECTION), true);
     }
 
     private static function productScope(?int $shopId = null): array
@@ -829,13 +871,10 @@ class BlocksignEsign extends Module
 
     public static function asset(string $name): string
     {
-        $directory = realpath(getenv('BLOCKSIGN_ESIGN_FILES') ?: '/nonexistent');
-        $documentRoot = $_SERVER['DOCUMENT_ROOT'] ?? '';
-        $root = realpath($documentRoot !== '' ? $documentRoot : _PS_ROOT_DIR_);
-        $file = $directory ? realpath($directory . '/' . $name) : false;
-        if (!$root || !$file || dirname($file) !== $directory
-            || str_starts_with($file, rtrim($root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR)
-            || !is_file($file) || !is_readable($file)) {
+        $path = getenv('BLOCKSIGN_ESIGN_FILES') ?: (self::connection()['directory'] ?? '');
+        $directory = ShopConfiguration::privateDirectory($path, [_PS_ROOT_DIR_, $_SERVER['DOCUMENT_ROOT'] ?? '']);
+        $file = $directory !== null ? realpath($directory . '/' . $name) : false;
+        if (!$file || dirname($file) !== $directory || !is_file($file) || !is_readable($file)) {
             throw new RuntimeException('BlockSign private file unavailable.');
         }
         return $file;
@@ -880,9 +919,9 @@ class BlocksignEsign extends Module
 
     public static function processQueue(): void
     {
-        $apiKey = getenv('BLOCKSIGN_ESIGN_API_KEY');
+        $apiKey = getenv('BLOCKSIGN_ESIGN_API_KEY') ?: (self::connection()['key'] ?? '');
         if (!$apiKey || preg_match('/[\r\n]/', $apiKey)) {
-            throw new RuntimeException('Configure the BlockSign API key in the worker environment.');
+            throw new RuntimeException('Configure the BlockSign API key in the module settings or worker environment.');
         }
         $db = Db::getInstance();
         $lock = 'blocksign_esign_' . substr(hash('sha256', _DB_NAME_ . ':' . _DB_PREFIX_), 0, 32);

@@ -7,8 +7,10 @@
 1. Baue die Plugin-ZIP mit `scripts/build-woocommerce.sh`. Lade `build/blocksign-esign-woocommerce.zip` unter **Plugins → Installieren → Plugin hochladen** hoch und aktiviere das Plugin.
 2. Lege ein einfaches **virtuelles** Produkt mit gewünschtem Preis an. WooCommerces Standard-Downloadfunktion bleibt für dieses Produkt ausgeschaltet.
 3. Kopiere die Erklärung als `agreement.pdf` und das Exposé als `download.pdf` in ein Verzeichnis außerhalb des Webroots, das der PHP-Prozess lesen kann und das der Webserver auch über Aliase nicht veröffentlicht. Die Erklärung braucht Platz für das Signaturfeld an der im nächsten Schritt konfigurierten Position.
-4. Setze in `wp-config.php` die Konstanten `BLOCKSIGN_ESIGN_FILES` (absoluter Verzeichnispfad) und `BLOCKSIGN_ESIGN_API_KEY` (API-Key aus einer serverseitigen Secret-Konfiguration).
+4. Hinterlege unter **Einstellungen → BlockSign eSign** den API-Key und den absoluten Pfad zum privaten PDF-Verzeichnis. Wenn du die Werte in `wp-config.php` als `BLOCKSIGN_ESIGN_API_KEY` und `BLOCKSIGN_ESIGN_FILES` aus der Serverkonfiguration bereitstellst, haben diese Werte Vorrang.
 5. Wähle unter **Einstellungen → BlockSign eSign** den Produktbereich sowie Signaturniveau, Seite und Position. Für die Signaturanfrage ist eine gültige E-Mail-Adresse erforderlich.
+
+Ein im Backend gespeicherter API-Key liegt in der Shop-Datenbank. Das Kennwortfeld erscheint bei jedem Öffnen leer. Um den gespeicherten Key zu löschen, aktiviere **Remove the saved key** und speichere das Formular.
 
 Der Job in WooCommerce Action Scheduler lädt die Erklärung hoch, bereitet die Signaturanfrage vor, sendet die BlockSign-Einladung und prüft anschließend den Status. Nach bestätigtem Abschluss erscheint der Link in der WooCommerce-Bestellansicht beim erneuten Laden. Die Downloadroute prüft Bestellberechtigung und Signaturstatus bei jedem Aufruf. Für Gastbestellungen ist der Bestellschlüssel der Zugangsschlüssel und entsprechend vertraulich zu behandeln.
 

@@ -6,8 +6,10 @@
 
 1. Erstelle die Modul-ZIP mit `scripts/build-prestashop.sh` oder lade das Artefakt aus GitHub Actions herunter. Installiere darin `blocksign-esign-prestashop.zip` über den Modulmanager eines **PrestaShop-9-Testshops**.
 2. Lege ein einzelnes virtuelles Produkt mit gewünschtem Preis an. Hinterlege dafür weder einen PrestaShop-Download noch einen öffentlich erreichbaren Anhang. Wähle den Produktbereich in der Modulkonfiguration.
-3. Lege `agreement.pdf` und `download.pdf` in einem privaten Verzeichnis außerhalb des Webroots ab. Setze `BLOCKSIGN_ESIGN_FILES` auf diesen absoluten Pfad, sowohl für den Web-PHP-Prozess als auch für den Worker. Wähle in der Modulkonfiguration außerdem Signaturniveau, PDF-Seite und Position.
-4. Stelle dem Worker `BLOCKSIGN_ESIGN_API_KEY` über die Secret-Konfiguration des Servers bereit. Lasse jede Minute `php /pfad/zum/shop/modules/blocksignesign/worker.php` unter dem Shop-Benutzer laufen. Das CLI-PHP benötigt cURL.
+3. Lege `agreement.pdf` und `download.pdf` in einem privaten Verzeichnis außerhalb des Webroots ab. Hinterlege als Superadmin den absoluten Verzeichnispfad und den API-Key in der Modulkonfiguration. Die beiden Werte gelten für die gesamte PrestaShop-Installation. Wähle außerdem Signaturniveau, PDF-Seite und Position.
+4. Lasse jede Minute `php /pfad/zum/shop/modules/blocksignesign/worker.php` unter dem Shop-Benutzer laufen. Das CLI-PHP benötigt cURL. Wenn du die Werte serverseitig verwaltest, haben `BLOCKSIGN_ESIGN_FILES` im Web-PHP und Worker sowie `BLOCKSIGN_ESIGN_API_KEY` im Worker Vorrang.
+
+Ein im Backend gespeicherter API-Key liegt in der Shop-Datenbank. Das Kennwortfeld erscheint bei jedem Öffnen leer. Um den gespeicherten Key zu löschen, wähle **Remove the saved API key → Yes** und speichere das Formular.
 
 PrestaShop zeigt den Statuslink auf der Bestellbestätigung und in der Bestellansicht. Gäste können den Link auch über die PrestaShop-Gastbestellverfolgung aufrufen. Ein Gastlink enthält einen vertraulichen, zufälligen Schlüssel pro Bestellung. Kunden mit Konto müssen zusätzlich angemeldet sein. Der Modul-Endpunkt prüft Bestellung, Schlüssel, Signaturstatus und Dateihash bei jedem Download. Wiederholte Bestellmeldungen behalten den vorhandenen Vorgang bei.
 

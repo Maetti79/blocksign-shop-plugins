@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: BlockSign eSign for WooCommerce
- * Description: Release a free virtual product after BlockSign confirms its signature.
- * Version: 0.15.0
+ * Description: Collect BlockSign confirmations and release protected WooCommerce orders.
+ * Version: 0.16.0
  * Requires PHP: 8.1
  * Requires Plugins: woocommerce
  * License: GPL-3.0-or-later
@@ -22,6 +22,7 @@ use BlockSign\ESign\CategoryDocuments;
 use BlockSign\ESign\RequiredSignatures;
 use BlockSign\ESign\SignatureSettings;
 use BlockSign\ESign\SignatureWorkflow;
+use BlockSign\ESign\ShopConfiguration;
 use InvalidArgumentException;
 use RuntimeException;
 use Automattic\WooCommerce\StoreApi\Exceptions\RouteException;
@@ -47,6 +48,7 @@ require_once __DIR__ . '/core/ProductFiles.php';
 require_once __DIR__ . '/core/OrderFiles.php';
 require_once __DIR__ . '/core/CategoryDocuments.php';
 require_once __DIR__ . '/core/EvidenceArchive.php';
+require_once __DIR__ . '/core/ShopConfiguration.php';
 
 const META = '_blocksign_esign';
 const JOB = 'blocksign_esign_check';
@@ -80,7 +82,25 @@ function signature_settings(): array
     return SignatureSettings::validate(get_option('blocksign_esign_signature', SignatureSettings::DEFAULTS));
 }
 
+function api_key(): string
+{
+    return defined('BLOCKSIGN_ESIGN_API_KEY') ? (string) BLOCKSIGN_ESIGN_API_KEY
+        : (string) (get_option('blocksign_esign_connection', [])['key'] ?? '');
+}
+
 add_action('admin_init', static function (): void {
+    register_setting('blocksign_esign', 'blocksign_esign_connection', [
+        'type' => 'array',
+        'sanitize_callback' => static function ($value): array {
+            $previous = (array) get_option('blocksign_esign_connection', []);
+            try {
+                return ShopConfiguration::credentials((array) $value, $previous['key'] ?? '', [ABSPATH, $_SERVER['DOCUMENT_ROOT'] ?? '']);
+            } catch (InvalidArgumentException $error) {
+                add_settings_error('blocksign_esign_connection', 'invalid_connection', $error->getMessage());
+                return $previous;
+            }
+        },
+    ]);
     register_setting('blocksign_esign', 'blocksign_esign_signature', [
         'type' => 'array',
         'sanitize_callback' => static function ($value): array {
@@ -149,6 +169,12 @@ add_action('admin_menu', static function (): void {
         settings_errors();
         echo '<form action="options.php" method="post">';
         settings_fields('blocksign_esign');
+        $connection = (array) get_option('blocksign_esign_connection', []);
+        printf('<p><label for="blocksign-key">BlockSign API key</label> <input id="blocksign-key" type="password" name="blocksign_esign_connection[key]" autocomplete="new-password"> %s</p>',
+            esc_html(defined('BLOCKSIGN_ESIGN_API_KEY') ? 'Server-managed key takes precedence.' : (api_key() !== '' ? 'Key saved. Leave blank to keep it.' : 'No key saved.')));
+        echo '<p><label><input type="checkbox" name="blocksign_esign_connection[remove_key]" value="1"> Remove the saved key</label></p>';
+        printf('<p><label for="blocksign-pdf-directory">Private PDF directory</label> <input id="blocksign-pdf-directory" name="blocksign_esign_connection[directory]" value="%s"> %s</p>',
+            esc_attr($connection['directory'] ?? ''), esc_html(defined('BLOCKSIGN_ESIGN_FILES') ? 'Server-managed directory takes precedence.' : 'Absolute path outside the web root.'));
         $scope = product_scope();
         echo '<p><label for="blocksign-scope">Protected products</label> <select id="blocksign-scope" name="blocksign_esign_scope[mode]">';
         foreach (['product' => 'Single product', 'category' => 'Product category', 'flagged' => 'Products marked on their edit screen', 'all' => 'All eligible virtual products'] as $value => $label) {
@@ -263,13 +289,11 @@ function private_access_page(int $id): ?\WP_Post
 
 function asset(string $name): string
 {
-    $directory = defined('BLOCKSIGN_ESIGN_FILES') ? realpath(BLOCKSIGN_ESIGN_FILES) : false;
-    $documentRoot = $_SERVER['DOCUMENT_ROOT'] ?? '';
-    $root = $documentRoot !== '' ? realpath($documentRoot) : realpath(ABSPATH);
-    $file = $directory ? realpath($directory . '/' . $name) : false;
-    if (!$root || !$file || dirname($file) !== $directory
-        || str_starts_with($file, rtrim($root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR)
-        || !is_file($file) || !is_readable($file)) {
+    $path = defined('BLOCKSIGN_ESIGN_FILES') ? (string) BLOCKSIGN_ESIGN_FILES
+        : (string) (get_option('blocksign_esign_connection', [])['directory'] ?? '');
+    $directory = ShopConfiguration::privateDirectory($path, [ABSPATH, $_SERVER['DOCUMENT_ROOT'] ?? '']);
+    $file = $directory !== null ? realpath($directory . '/' . $name) : false;
+    if (!$file || dirname($file) !== $directory || !is_file($file) || !is_readable($file)) {
         throw new RuntimeException('BlockSign private file unavailable.');
     }
 
@@ -368,7 +392,7 @@ function snapshot(WC_Order $order, bool $preview = false): void
     if ($total > 0 && $order->get_payment_method() === 'cod') {
         throw new RuntimeException('Cash on delivery is unavailable for protected BlockSign orders.');
     }
-    if (!defined('BLOCKSIGN_ESIGN_API_KEY') || !BLOCKSIGN_ESIGN_API_KEY) {
+    if (api_key() === '') {
         throw new RuntimeException('BlockSign is not configured.');
     }
     $placement = signature_settings();
@@ -772,11 +796,12 @@ function payment_ready(WC_Order $order, array $state): bool
 
 function client(): Client
 {
-    return new Client(static function (string $method, string $path, string $type, string $body): array|string {
+    $apiKey = api_key();
+    return new Client(static function (string $method, string $path, string $type, string $body) use ($apiKey): array|string {
         $response = wp_remote_request('https://blocksign.io' . $path, [
             'method' => $method,
             'headers' => [
-                'Authorization' => 'Bearer ' . BLOCKSIGN_ESIGN_API_KEY,
+                'Authorization' => 'Bearer ' . $apiKey,
                 'Content-Type' => $type,
                 'Accept' => $type === 'application/pdf' ? $type : 'application/json',
             ],
