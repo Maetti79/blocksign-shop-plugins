@@ -1,0 +1,9 @@
+[
+  {"name":"ordinary order","stage":"fulfillment","requirements":[],"allowed":true},
+  {"name":"free download remains locked","stage":"fulfillment","requirements":[{"timing":"without_payment","completed":false}],"allowed":false},
+  {"name":"signed free download","stage":"fulfillment","requirements":[{"timing":"without_payment","completed":true}],"allowed":true},
+  {"name":"before order","stage":"order","requirements":[{"timing":"before_order","completed":false}],"allowed":false},
+  {"name":"before payment","stage":"payment","requirements":[{"timing":"before_payment","completed":false}],"allowed":false},
+  {"name":"pay before signing","stage":"payment","requirements":[{"timing":"after_payment","completed":false}],"allowed":true},
+  {"name":"one of two documents is still open","stage":"fulfillment","requirements":[{"timing":"before_payment","completed":true},{"timing":"after_payment","completed":false}],"allowed":false}
+]

@@ -1,0 +1,25 @@
+name: Check packages
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: find packages/php plugins -name '*.php' -exec php -l {} \;
+      - run: php tests/gate.php
+      - run: npm --prefix packages/typescript ci
+      - run: npm --prefix packages/typescript test
+      - run: scripts/build-woocommerce.sh
+      - run: unzip -q build/blocksign-esign-woocommerce.zip -d build && php tests/woocommerce-pilot.php build/blocksign-esign
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blocksign-esign-woocommerce
+          path: build/blocksign-esign-woocommerce.zip

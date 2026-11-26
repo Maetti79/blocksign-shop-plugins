@@ -1,0 +1,11 @@
+{
+  "name": "@blocksign/esign-core",
+  "version": "0.1.0",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "exports": "./dist/gate.js",
+  "types": "./dist/gate.d.ts",
+  "files": ["dist"],
+  "scripts": {"build": "tsc", "test": "npm run build && node ../../tests/gate.mjs"},
+  "devDependencies": {"typescript": "5.9.3"}
+}

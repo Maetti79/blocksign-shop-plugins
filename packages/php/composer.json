@@ -1,0 +1,7 @@
+{
+  "name": "blocksign/esign-core",
+  "description": "Shop-independent BlockSign rules and API client",
+  "license": "GPL-3.0-or-later",
+  "require": {"php": ">=8.1"},
+  "autoload": {"psr-4": {"BlockSign\\ESign\\": "src/"}}
+}
