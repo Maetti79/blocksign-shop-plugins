@@ -26,8 +26,8 @@ Bei Fragen zu Konto, API-Key, Abrechnung oder Shop-Anbindung erreichst du Dennis
 | Elektronischer Zustellnachweis | Ja | Ja | Ja | Ja | Ja |
 | Bestätigung ohne Zahlung bei 0 € | Ja | Ja | Ja | Ja | Ja · mit Kundenkonto |
 | Bestätigung nach Zahlungseingang | Ja | Ja | Ja | Ja | Ja · über Zahlungsdatum in JTL-Shop |
-| Bestätigung vor Zahlung | Ja · Bestellzahlungsseite oder vor Bestellabgabe | Teilweise · Vorkasse und Scheck | Ja · vor Bestellabgabe im Standard-Checkout | Ja · eigener Kaufablauf mit Shopify-Rechnungslink | Offen |
-| Bestätigung vor verbindlicher Bestellabgabe im regulären Checkout | Ja · klassischer Checkout und Checkout Blocks | Teilweise · 0 €, Vorkasse und Scheck | Ja · Standard-Checkout | Offen | Offen |
+| Bestätigung vor Zahlung | Ja · Bestellzahlungsseite oder vor Bestellabgabe | Teilweise · Vorkasse, Scheck und Stripe Checkout | Ja · vor Bestellabgabe im Standard-Checkout | Ja · eigener Kaufablauf mit Shopify-Rechnungslink | Offen |
+| Bestätigung vor verbindlicher Bestellabgabe im regulären Checkout | Ja · klassischer Checkout und Checkout Blocks | Teilweise · 0 €, Vorkasse, Scheck und Stripe Checkout | Ja · Standard-Checkout | Offen | Offen |
 | Zeitpunkt pro Produkt oder Kategorie | Ja · vor Bestellung, vor Zahlung oder nach Zahlung | Ja · vor Bestellung oder nach Zahlung | Ja · Produkt- und Kategorieregeln | Teilweise · Regeln je Variante, Produkt und Tag. Vor Zahlung je Variante über Bestellentwurf | Offen · 0 € oder nach Zahlung |
 | Früh und spät zu bestätigende Dokumente im selben Warenkorb | Ja · drei getrennte Phasen | Ja · vor Bestellung und nach Zahlung im unterstützten Checkout | Ja · vor Bestellung und nach Zahlung | Teilweise · nach Zahlung im regulären Warenkorb. Vor Zahlung als Einzelvariante | Offen |
 | Geschützter PDF-Download nach Bestätigung | Ja | Ja | Ja | Ja · im Käuferkonto | Ja · im Käuferkonto |
@@ -37,13 +37,13 @@ Bei Fragen zu Konto, API-Key, Abrechnung oder Shop-Anbindung erreichst du Dennis
 | Automatisierte Paket- und Funktionstests | Bestanden | Bestanden | Bestanden | Bestanden | Bestanden |
 | End-to-End-Abnahme mit BlockSign und echtem Zahlungsanbieter im Testmodus | Offen | Offen | Offen | Offen | Offen |
 
-Für die Vorab-Bestätigung mit Kreditkarte, PayPal oder SEPA-Lastschrift in PrestaShop steht die Online-Zahlungsanbindung aus. In Shopify legt der Shop die verfügbaren Zahlungsmethoden für den Rechnungslink fest.
+In PrestaShop öffnet das optionale Zahlungsmodul Stripe Checkout nach der Vorab-Bestätigung. Kreditkarte, PayPal und SEPA-Lastschrift hängen vom Stripe-Konto ab. In Shopify legt der Shop die verfügbaren Zahlungsmethoden für den Rechnungslink fest. [PrestaShop-Zahlungsmodul](plugins/prestashop-checkout/README.md)
 
 In WooCommerce, PrestaShop und Shopware können Dokumente desselben Warenkorbs zu verschiedenen Zeitpunkten bestätigt werden. Bei einer 0‑€‑Bestellung können die dafür vorgesehenen Dokumente direkt nach Bestellabgabe starten. Auslieferung und Zugriff setzen die vollständige Bestätigung der Pflichtdokumente und bei einem positiven Bestellwert die Zahlung voraus.
 
 Die Einrichtung steht in den Shop-READMEs. [WooCommerce](plugins/woocommerce/README.md) · [PrestaShop 9](plugins/prestashop/README.md) · [Shopware 6.7](plugins/shopware/README.md) · [Shopify](plugins/shopify/README.md) · [JTL-Shop 5.5+](plugins/jtl-shop/README.md)
 
-GitHub Actions baut alle fünf Pakete. [Workflow und ZIP-Artefakte](https://github.com/Maetti79/blocksign-shop-plugins/actions/workflows/check.yml)
+GitHub Actions baut die fünf Shop-Pakete und das optionale PrestaShop-Zahlungsmodul. [Workflow und ZIP-Artefakte](https://github.com/Maetti79/blocksign-shop-plugins/actions/workflows/check.yml)
 
 ## Anwendungsfälle und Rechtsgrundlagen
 

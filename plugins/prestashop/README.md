@@ -61,7 +61,9 @@ PrestaShop verarbeitet eine bezahlte Bestellung ab dem nächsten Worker-Lauf, so
 
 Aktiviere **Require confirmation before order and payment** in der Modulkonfiguration. Im Standard-Checkout startet der Kunde die Bestätigung über die BlockSign-Schaltfläche im Zahlungsschritt. Der CLI-Worker sendet die Einladungen. Nach der letzten Bestätigung lädt der Kunde den Checkout erneut und kann die Bestellung aufgeben. Die Freigabe gilt höchstens sieben Tage für den konkreten Warenkorb, den Kunden, den Betrag und die hinterlegten Dokumente. Sie lässt sich einmal verwenden.
 
-Der Modus unterstützt 0‑€‑Bestellungen sowie PrestaShops native Module für Vorkasse per Überweisung (`ps_wirepayment`) und Scheck (`ps_checkpayment`). Zahlungsanweisungen erscheinen dadurch erst nach der Bestätigung und Bestellabgabe. Deaktiviere alle anderen Zahlungswege für die geschützten Produkte. Der serverseitige Hook kennt den aktiven Browser-Warenkorb. Externe Zahlungsanbieter können Zahlungen außerhalb dieses Hooks auslösen. Ein Theme muss im Zahlungsschritt `displayPaymentTop` ausgeben. Aktualisiere das Modul im Modulmanager, damit die Tabelle und die Hooks angelegt werden.
+Der Modus unterstützt 0‑€‑Bestellungen, native Vorkasse per Überweisung (`ps_wirepayment`), Scheck (`ps_checkpayment`) und das optionale Modul **BlockSign Checkout**. Die Zahlungsanweisungen oder der Online-Zahlungslink erscheinen nach der Bestätigung und Bestellabgabe. Ein Theme muss im Zahlungsschritt `displayPaymentTop` ausgeben. Aktualisiere das Modul im Modulmanager, damit die Tabelle und die Hooks angelegt werden. Express-Zahlungswege fremder Module können Zahlungen außerhalb dieses Hooks auslösen. Deaktiviere sie für geschützte Produkte.
+
+**BlockSign Checkout** öffnet Stripe Checkout mit den freigeschalteten Zahlungsarten Kreditkarte, PayPal oder SEPA-Lastschrift. Der Stripe-Webhook bucht auch eine verspätete Zahlung erst nach Bestätigung durch Stripe. [Einrichtung des Zahlungsmoduls](../prestashop-checkout/README.md)
 
 ## Zeitpunkt pro Produkt oder Kategorie
 

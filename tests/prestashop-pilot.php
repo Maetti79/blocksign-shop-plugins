@@ -530,7 +530,7 @@ $module->context->link = new class {
     public function getPageLink(): string { return '/order'; }
 };
 check(str_contains($module->hookDisplayPaymentTop(), 'Request BlockSign'), 'checkout did not offer a signing start');
-$available = ['ps_checkpayment' => ['check'], 'stripe' => ['payment']];
+$available = ['ps_checkpayment' => ['check'], 'stripe' => ['payment'], 'blocksigncheckout' => ['hosted checkout']];
 $options = $available;
 $module->hookActionPresentPaymentOptions(['paymentOptions' => &$options]);
 check($options === [], 'unconfirmed cart still lists payment methods');
@@ -550,7 +550,8 @@ unset($document);
 Db::$preorder['state'] = json_encode($proof);
 $options = $available;
 $module->hookActionPresentPaymentOptions(['paymentOptions' => &$options]);
-check(array_keys($options) === ['ps_checkpayment'], 'unsupported payment module remained available');
+check(array_keys($options) === ['ps_checkpayment', 'blocksigncheckout'] && $module->onlineCheckoutReady(),
+    'an unsupported payment module remained available or the signed hosted checkout stayed closed');
 $module->hookActionValidateOrderBefore(['cart' => $module->context->cart]);
 check(Db::$preorder['used'] === 1, 'checkout proof was not consumed');
 
@@ -560,6 +561,8 @@ $customer = $module->context->customer;
 $module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
 $archived = json_decode(Db::$row['state'], true);
 check($archived['timing'] === 'before_order' && \BlockSign\ESign\RequiredSignatures::complete($archived), 'order did not inherit completed cart proof');
+check($archived['confirmed_currency_id'] === 1 && (float) $archived['confirmed_total'] === 10.0
+    && $archived['confirmed_cart'] === [[99, 0, 1]], 'the signed cart, amount and currency were not pinned for online payment');
 try {
     $module->hookActionValidateOrderBefore(['cart' => $module->context->cart]);
     check(false, 'consumed cart proof was reused');
@@ -688,7 +691,7 @@ unset($doc);
 Db::$preorder['state'] = json_encode($preview);
 $options = $available;
 $module->hookActionPresentPaymentOptions(['paymentOptions' => &$options]);
-check(array_keys($options) === ['ps_checkpayment'], 'later documents still blocked the supported payment option');
+check(array_keys($options) === ['ps_checkpayment', 'blocksigncheckout'], 'later documents still blocked the supported payment options');
 $module->hookActionValidateOrderBefore(['cart' => $module->context->cart]);
 
 Order::$paidOrder = true;

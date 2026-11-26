@@ -37,7 +37,7 @@ class BlocksignEsign extends Module
 {
     private const PREORDER = 'BLOCKSIGN_ESIGN_PREORDER';
     private const TIMING_RULES = 'BLOCKSIGN_ESIGN_TIMING_RULES';
-    private const OFFLINE_MODULES = ['ps_wirepayment', 'ps_checkpayment'];
+    private const PREORDER_PAYMENT_MODULES = ['ps_wirepayment', 'ps_checkpayment', 'blocksigncheckout'];
     private static array $approvedCarts = [];
     private const PRODUCT = 'BLOCKSIGN_ESIGN_PRODUCT';
     private const SCOPE = 'BLOCKSIGN_ESIGN_SCOPE';
@@ -57,7 +57,7 @@ class BlocksignEsign extends Module
     public function __construct()
     {
         $this->name = 'blocksignesign';
-        $this->version = '0.14.0';
+        $this->version = '0.15.0';
         $this->author = 'BlockSign';
         $this->tab = 'administration';
         $this->ps_versions_compliancy = ['min' => '9.0.0', 'max' => _PS_VERSION_];
@@ -376,7 +376,7 @@ class BlocksignEsign extends Module
                 'type' => 'switch',
                 'name' => 'blocksign_preorder',
                 'label' => 'Require confirmation before order and payment',
-                'desc' => 'For protected carts, use only native free orders, bank transfer and check payment. Disable other payment modules for these products.',
+                'desc' => 'Supported: free orders, native bank transfer and checks, or the separate BlockSign Checkout payment module.',
                 'values' => [
                     ['id' => 'blocksign_preorder_on', 'value' => 1, 'label' => 'Yes'],
                     ['id' => 'blocksign_preorder_off', 'value' => 0, 'label' => 'No'],
@@ -556,7 +556,7 @@ class BlocksignEsign extends Module
         ];
         $identity = [(int) $cart->id, (int) $cart->id_customer, (int) $cart->id_currency, (int) $cart->id_shop,
             (string) $total, $lines, $state];
-        return [hash_hmac('sha256', json_encode($identity, JSON_THROW_ON_ERROR), _COOKIE_KEY_), $state];
+        return [hash_hmac('sha256', json_encode($identity, JSON_THROW_ON_ERROR), _COOKIE_KEY_), $state, $lines];
     }
 
     private static function preorderRow(string $key): ?array
@@ -609,7 +609,7 @@ class BlocksignEsign extends Module
                 return;
             }
             $params['paymentOptions'] = self::readyProof(self::preorderRow($proof[0]))
-                ? array_intersect_key($params['paymentOptions'], array_fill_keys([...self::OFFLINE_MODULES, 'free_order'], true))
+                ? array_intersect_key($params['paymentOptions'], array_fill_keys([...self::PREORDER_PAYMENT_MODULES, 'free_order'], true))
                 : [];
         } catch (Throwable $error) {
             $params['paymentOptions'] = [];
@@ -637,6 +637,16 @@ class BlocksignEsign extends Module
         }
     }
 
+    public function onlineCheckoutReady(): bool
+    {
+        try {
+            $proof = $this->checkoutProof();
+            return $proof !== null && self::readyProof(self::preorderRow($proof[0])) !== null;
+        } catch (Throwable $error) {
+            return false;
+        }
+    }
+
     public function hookActionValidateOrderBefore(array $params): void
     {
         try {
@@ -649,7 +659,7 @@ class BlocksignEsign extends Module
             $free = (float) $cart->getOrderTotal(true, Cart::BOTH) === 0.0
                 && $this->context->controller instanceof OrderConfirmationController && (bool) Tools::getValue('free_order');
             $state = self::readyProof(self::preorderRow($proof[0]));
-            if (!$state || (!$free && !in_array($module, self::OFFLINE_MODULES, true))) {
+            if (!$state || (!$free && !in_array($module, self::PREORDER_PAYMENT_MODULES, true))) {
                 throw new RuntimeException('BlockSign checkout confirmation is required.');
             }
 
@@ -658,7 +668,11 @@ class BlocksignEsign extends Module
                 "fingerprint = '" . pSQL($proof[0]) . "' AND used = 0 AND expires > " . time()) || (int) $db->Affected_Rows() !== 1) {
                 throw new RuntimeException('BlockSign checkout confirmation has already been used.');
             }
-            self::$approvedCarts[(int) $cart->id] = $state;
+            self::$approvedCarts[(int) $cart->id] = $state + [
+                'confirmed_total' => (string) $cart->getOrderTotal(true, Cart::BOTH),
+                'confirmed_currency_id' => (int) $cart->id_currency,
+                'confirmed_cart' => $proof[2],
+            ];
         } catch (Throwable $error) {
             // PrestaShop can swallow ordinary hook exceptions in production.
             Tools::redirect($this->context->link->getPageLink('order', true));
@@ -801,7 +815,7 @@ class BlocksignEsign extends Module
         return match ($timing) {
             'without_payment' => $total === 0.0 && $order->module === 'free_order',
             'before_order' => ($total === 0.0 && $order->module === 'free_order')
-                || ($total > 0.0 && in_array($order->module, self::OFFLINE_MODULES, true)),
+                || ($total > 0.0 && in_array($order->module, self::PREORDER_PAYMENT_MODULES, true)),
             'after_payment' => $total > 0.0 && !in_array($order->module, ['free_order', 'ps_cashondelivery', 'cashondelivery'], true),
             default => false,
         };

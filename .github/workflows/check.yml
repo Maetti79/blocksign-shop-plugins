@@ -50,3 +50,9 @@ jobs:
         with:
           name: blocksign-esign-jtl-shop
           path: build/blocksign-esign-jtl-shop.zip
+      - run: scripts/build-prestashop-checkout.sh
+      - run: unzip -q build/blocksign-checkout-prestashop.zip -d build && php tests/prestashop-checkout.php build/blocksigncheckout
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blocksign-checkout-prestashop
+          path: build/blocksign-checkout-prestashop.zip

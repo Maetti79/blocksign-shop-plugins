@@ -15,7 +15,7 @@ class BlocksignEsignDocumentModuleFrontController extends ModuleFrontController
         header('Cache-Control: private, no-store, max-age=0');
         header('Referrer-Policy: no-referrer');
         header('X-Content-Type-Options: nosniff');
-        header("Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
+        header("Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
 
         $orderId = (int) Tools::getValue('order', 0);
         $token = Tools::getValue('token', '');
@@ -80,10 +80,23 @@ class BlocksignEsignDocumentModuleFrontController extends ModuleFrontController
         if (!BlocksignEsign::paymentReady($order, $state)) {
             $message = 'Fulfillment is on hold while payment is unconfirmed.';
         }
+        $paymentForm = '';
+        if ($order->module === 'blocksigncheckout' && Module::isEnabled('blocksigncheckout')) {
+            $checkout = Module::getInstanceByName('blocksigncheckout');
+            if ($checkout && $checkout->canResume($order)) {
+                $url = $this->context->link->getModuleLink('blocksigncheckout', 'checkout', [], true);
+                $paymentForm = '<form method="post" action="' . BlocksignEsign::escape($url) . '">'
+                    . '<input type="hidden" name="order" value="' . $orderId . '">'
+                    . '<input type="hidden" name="order_token" value="' . BlocksignEsign::escape($token) . '">'
+                    . '<input type="hidden" name="checkout_token" value="' . BlocksignEsign::escape(Tools::getToken(false)) . '">'
+                    . '<button type="submit">Weiter zur Online-Zahlung</button></form>'
+                    . '<p>Bei SEPA-Lastschrift kann es dauern, bis Stripe die Zahlung bestätigt.</p>';
+            }
+        }
 
         header('Content-Type: text/html; charset=UTF-8');
         echo '<!DOCTYPE html><html lang="en"><meta charset="utf-8"><title>BlockSign</title>'
-            . '<main><h1>Signature and download</h1><p>' . $message . '</p></main></html>';
+            . '<main><h1>Signature and download</h1><p>' . $message . '</p>' . $paymentForm . '</main></html>';
         exit;
     }
 

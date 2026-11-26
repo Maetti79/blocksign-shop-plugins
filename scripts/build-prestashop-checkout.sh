@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+staging="$(mktemp -d)"
+trap 'rm -rf "$staging"' EXIT
+mkdir -p "$staging/blocksigncheckout" build
+cp -R plugins/prestashop-checkout/. "$staging/blocksigncheckout/"
+cp LICENSE "$staging/blocksigncheckout/"
+find "$staging" -mindepth 1 -type d -exec chmod 755 {} +
+find "$staging" -type f -exec chmod 644 {} +
+archive="$PWD/build/blocksign-checkout-prestashop.zip"
+rm -f "$archive"
+(cd "$staging" && zip -q -r "$archive" blocksigncheckout)
