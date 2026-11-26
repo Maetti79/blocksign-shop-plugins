@@ -59,9 +59,15 @@ WooCommerce reagiert auf Zahlungsbestätigung und Statuswechsel. Der Vorgang ver
 
 ## Signatur vor Zahlung
 
-Wähle unter **Einstellungen → BlockSign eSign** bei **Signature timing for paid orders** die Option **Before payment**. Die Einstellung gilt für neue bezahlte Bestellungen des konfigurierten PDF-Produkts. Der klassische Checkout (Shortcode) und Checkout Blocks legen eine offene Bestellung an und leiten zur Bestellansicht weiter, während BlockSign die Einladungen versendet. Nach der letzten bestätigten Signatur erscheint dort **Continue to payment**. Gäste können die Bestellansicht nach dem Signieren erneut öffnen. WooCommerce prüft die Signaturen auch bei einem direkten Aufruf des Bestellzahlungsformulars.
+Wähle unter **Einstellungen → BlockSign eSign** bei **Signature timing** die Option **Before payment**. Die Einstellung gilt für neue bezahlte Bestellungen des konfigurierten PDF-Produkts. Der klassische Checkout (Shortcode) und Checkout Blocks legen eine offene Bestellung an und leiten zur Bestellansicht weiter, während BlockSign die Einladungen versendet. Nach der letzten bestätigten Signatur erscheint dort **Continue to payment**. Gäste können die Bestellansicht nach dem Signieren erneut öffnen. WooCommerce prüft die Signaturen auch bei einem direkten Aufruf des Bestellzahlungsformulars.
 
 Diese Variante setzt einen Zahlungsanbieter voraus, der WooCommerces standardmäßige Seite zur Zahlung offener Bestellungen unterstützt. Verwende für das geschützte Produkt den normalen Checkout ohne Express-Zahlungsbuttons. Der Store-API-Checkout gibt während der Signatur einen ausstehenden Zahlungsstatus und den Link zur Bestellansicht zurück. Im Block-Template der Bestellbestätigung zeigt der Block **Zusätzliche Informationen** die Signaturhinweise und den Zahlungslink. Die Bestellung wird vor der Signatur angelegt. Wenn die Unterschrift vor einer verbindlichen Bestellung vorliegen muss, brauchst du eine Sperre vor der verbindlichen Bestellabgabe.
+
+## Bestellabgabe erst nach Signatur
+
+Wähle unter **Signature timing** die Option **Before order (classic checkout)**. Der erste Checkout-Versuch prüft die Angaben und plant die BlockSign-Einladungen im Hintergrund. Der Kunde bleibt auf der Checkout-Seite. Nach der Bestätigung aller Pflichtdokumente sendet er das Formular erneut ab. Erst dann legt WooCommerce die Bestellung an und startet bei einem zahlungspflichtigen Warenkorb die Zahlung. Die Auswahl gilt auch für 0‑€‑Bestellungen.
+
+Die Bestätigung gilt bis zu sieben Tage für die Checkout-Sitzung, den Warenkorb, die E-Mail-Adresse, den Gesamtbetrag und die Dokumentversionen. Eine Bestellung verbraucht die Bestätigung. Bei geänderten Angaben startet ein neuer Vorgang. Wenn die Bestellerstellung nach dem Verbrauch fehlschlägt, muss der Kunde erneut bestätigen. Verwende den klassischen Checkout ohne Express-Zahlungsbuttons. Checkout Blocks weist diesen Modus serverseitig ab.
 
 ## Elektronischer Zustellnachweis
 

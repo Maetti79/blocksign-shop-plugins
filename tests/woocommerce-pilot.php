@@ -6,6 +6,7 @@ use function BlockSign\WooCommerce\advance;
 use function BlockSign\WooCommerce\download_allowed;
 
 define('ABSPATH', __DIR__);
+define('WEEK_IN_SECONDS', 604800);
 define('BLOCKSIGN_ESIGN_API_KEY', 'fixture-only');
 define('BLOCKSIGN_ESIGN_FILES', sys_get_temp_dir() . '/blocksign-test-' . bin2hex(random_bytes(8)));
 define('PLUGIN_PATH', $argv[1] ?? __DIR__ . '/../plugins/woocommerce');
@@ -46,9 +47,12 @@ class WC_Order
     public function get_items(): array { return $this->items ?: [new WC_Order_Item()]; }
     public string $method = 'stripe';
     public function set_payment_method(string $method): void { $this->method = $method; }
+    public function set_billing_email(string $email): void { $this->email = $email; }
+    public function set_total(float $total): void { $this->total = $total; }
+    public function add_item(WC_Order_Item $item): void { $this->items[] = $item; }
     public function get_meta(string $key): array { return $this->state; }
 
-    public function __construct(public array $state)
+    public function __construct(public array $state = [])
     {
     }
 
@@ -94,6 +98,54 @@ class WC_Order_Item
     public function get_variation_id(): int { return 0; }
     public function get_quantity(): int { return 1; }
     public function get_product(): WC_Product { return new WC_Product($this->virtual); }
+}
+
+class WC_Order_Item_Product extends WC_Order_Item
+{
+    private WC_Product $product;
+    private int $quantity;
+    public function set_product(WC_Product $product): void { $this->product = $product; }
+    public function set_quantity(int $quantity): void { $this->quantity = $quantity; }
+    public function get_product(): WC_Product { return $this->product; }
+    public function get_quantity(): int { return $this->quantity; }
+}
+
+class WP_Error
+{
+    public array $messages = [];
+    public function add(string $code, string $message): void { $this->messages[$code] = $message; }
+    public function has_errors(): bool { return $this->messages !== []; }
+}
+
+function wp_salt(string $scheme): string { return 'fixture'; }
+function wc_get_price_decimals(): int { return 2; }
+function wc_format_decimal(float $value, int $decimals): string { return number_format($value, $decimals, '.', ''); }
+function get_woocommerce_currency(): string { return 'EUR'; }
+
+function add_option(string $name, int $value, string $description, bool $autoload): bool
+{
+    if (isset($GLOBALS['locks'][$name])) {
+        return false;
+    }
+    return $GLOBALS['locks'][$name] = true;
+}
+
+function delete_option(string $name): void { unset($GLOBALS['locks'][$name]); }
+function get_transient(string $name): array|false { return $GLOBALS['transients'][$name] ?? false; }
+
+function set_transient(string $name, array $state, int $expiry): bool
+{
+    $GLOBALS['transients'][$name] = $state;
+    return true;
+}
+
+function delete_transient(string $name): bool
+{
+    if (!isset($GLOBALS['transients'][$name])) {
+        return false;
+    }
+    unset($GLOBALS['transients'][$name]);
+    return true;
 }
 
 class CheckoutInterrupted extends RuntimeException
@@ -214,6 +266,14 @@ function WC(): object
         public function save_data(): void
         {
         }
+
+        public function get_customer_id(): string
+        {
+            return $GLOBALS['session_id'] ?? 'fixture-customer';
+        }
+    }, 'cart' => new class {
+        public function get_cart(): array { return [['data' => new WC_Product(), 'quantity' => 1]]; }
+        public function get_total(string $context): string { return '10.00'; }
     }];
 }
 
@@ -230,7 +290,8 @@ function wc_get_order(int $id): WC_Order
 
 function as_enqueue_async_action(string $hook, array $args, string $group, bool $unique): void
 {
-    check($unique && $args === [42], 'paid order must enqueue a unique action');
+    check($unique && ($args === [42] || ($hook === 'blocksign_esign_preorder_check' && strlen($args[0]) === 64)),
+        'signature checks must enqueue a unique action');
     $GLOBALS['queued'][$hook] = $args;
 }
 
@@ -489,3 +550,72 @@ $hooks['woocommerce_checkout_create_order']($order);
 check(array_column($order->state['documents'], 'file') === ['custom-agreement.pdf', 'category-terms.pdf'],
     'matching category document was not included');
 echo "PASS WooCommerce category-specific documents\n";
+
+$configured_timing = 'before_order';
+$configured_scope = ['mode' => 'product', 'category_id' => 0];
+$category_documents = '';
+WC_Product::$metadata = [];
+$queued = $transients = [];
+$checkoutData = ['billing_email' => $signer, 'payment_method' => 'stripe'];
+$errors = new WP_Error();
+$hooks['woocommerce_after_checkout_validation']($checkoutData, $errors);
+check($errors->has_errors() && count($queued) === 1 && count($transients) === 1, 'unsigned checkout was not blocked and queued');
+
+$order = new WC_Order();
+$order->total = 10;
+try {
+    $hooks['woocommerce_checkout_create_order']($order);
+    check(false, 'unsigned proof was accepted when creating an order');
+} catch (RuntimeException $error) {
+    check(str_contains($error->getMessage(), 'Confirm all required'), 'unexpected checkout condition');
+}
+check($order->state === [], 'unsigned state leaked onto an order');
+
+$responses = [
+    ['method' => 'POST', 'path' => $documents, 'code' => 202, 'body' => ['document_id' => $documentId]],
+    ['method' => 'POST', 'path' => $requests, 'code' => 201, 'body' => ['request_id' => $requestId]],
+    ['method' => 'POST', 'path' => "$request/send", 'code' => 200, 'body' => ['sent_at' => '2026-11-26T00:00:00Z']],
+    ['method' => 'GET', 'path' => $request, 'code' => 200, 'body' => $complete],
+];
+$hooks['blocksign_esign_preorder_check']($queued['blocksign_esign_preorder_check'][0]);
+check($responses === [], 'preorder job did not complete the required provider workflow');
+
+$session_id = 'another-session';
+try {
+    $hooks['woocommerce_checkout_create_order']($order);
+    check(false, 'a different session reused proof');
+} catch (RuntimeException $error) {
+    check(str_contains($error->getMessage(), 'Confirm all required'), 'wrong-session proof was not explicitly rejected');
+}
+unset($session_id);
+$errors = new WP_Error();
+$hooks['woocommerce_after_checkout_validation']($checkoutData, $errors);
+check(!$errors->has_errors(), 'signed checkout was still blocked');
+$hooks['woocommerce_checkout_create_order']($order);
+check($order->state['documents'][0]['completed'] && $transients === [], 'signed proof was not consumed exactly once');
+check(!download_allowed($order, $order->state), 'before-order confirmation alone released a paid download');
+$order->paid = true;
+$order->paidAt = new DateTimeImmutable();
+check(download_allowed($order, $order->state), 'signed and paid order did not release its download');
+
+$another = new WC_Order();
+$another->total = 10;
+try {
+    $hooks['woocommerce_checkout_create_order']($another);
+    check(false, 'a second order reused proof');
+} catch (RuntimeException $error) {
+    check(str_contains($error->getMessage(), 'Confirm all required'), 'proof replay was not explicitly rejected');
+}
+try {
+    $hooks['woocommerce_store_api_checkout_update_order_from_request']($another, new WP_REST_Request('POST', '/wc/store/v1/checkout'));
+    check(false, 'Store API advanced the draft in classic checkout only mode');
+} catch (RouteError $error) {
+    check($error->getCode() === 400 && $another->state === [], 'Store API draft must be rejected before checkout advances');
+}
+try {
+    $hooks['woocommerce_store_api_checkout_order_processed']($another);
+    check(false, 'Store API placed an order in classic checkout only mode');
+} catch (RouteError $error) {
+    check($error->getCode() === 400, 'Store API should fail closed for a before-order product');
+}
+echo "PASS WooCommerce before-order checkout and proof replay prevention\n";
