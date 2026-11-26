@@ -37,3 +37,10 @@ jobs:
         with:
           name: blocksign-esign-shopware
           path: build/blocksign-esign-shopware.zip
+      - run: packages/typescript/node_modules/.bin/tsc -p plugins/shopify/tsconfig.json
+      - run: scripts/build-shopify.sh
+      - run: unzip -q build/blocksign-esign-shopify.zip -d build && node --test build/blocksign-shopify/tests/shopify.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blocksign-esign-shopify
+          path: build/blocksign-esign-shopify.zip

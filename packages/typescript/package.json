@@ -1,11 +1,28 @@
 {
   "name": "@blocksign/esign-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "GPL-3.0-or-later",
   "type": "module",
-  "exports": "./dist/gate.js",
+  "exports": {
+    ".": {
+      "types": "./dist/gate.d.ts",
+      "default": "./dist/gate.js"
+    },
+    "./blocksign": {
+      "types": "./dist/blocksign.d.ts",
+      "default": "./dist/blocksign.js"
+    }
+  },
   "types": "./dist/gate.d.ts",
-  "files": ["dist"],
-  "scripts": {"build": "tsc", "test": "npm run build && node ../../tests/gate.mjs"},
-  "devDependencies": {"typescript": "5.9.3"}
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node ../../tests/gate.mjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "24.10.1"
+  }
 }

@@ -9,6 +9,7 @@ BlockSign eSign verknüpft Shop-Bestellungen mit elektronischen Unterschriften. 
 | WooCommerce | Ohne Zahlung, nach Zahlung, vor Zahlung und vor Bestellabgabe im klassischen Checkout und in Checkout Blocks | [WooCommerce-README](plugins/woocommerce/README.md) |
 | PrestaShop 9 | Ohne Zahlung, nach Zahlung und vor Bestellabgabe im Standard-Checkout mit 0‑€‑Bestellung, Vorkasse oder Scheck | [PrestaShop-README](plugins/prestashop/README.md) |
 | Shopware 6.7 | Ohne Zahlung, nach Zahlung und vor Bestellabgabe und Zahlung im Standard-Checkout | [Shopware-README](plugins/shopware/README.md) |
+| Shopify | Ohne Zahlung und nach Zahlung. Vor Zahlung über Shopify-Bestellentwürfe mit Rechnungslink | [Shopify-README](plugins/shopify/README.md) |
 
 GitHub Actions baut die Installationspakete. [Workflow und ZIP-Artefakte](https://github.com/Maetti79/blocksign-shop-plugins/actions/workflows/check.yml)
 
@@ -43,7 +44,7 @@ Das erforderliche Signaturniveau hängt vom Dokument und den geltenden Formvorsc
 
 ## Entwicklung
 
-Der [PHP-Kern](packages/php) enthält den BlockSign-REST-Client und die Freigabelogik der Shop-Module. Das [TypeScript-Paket](packages/typescript) enthält dieselben Freigaberegeln und verwendet dieselben Testdaten. [BlockSign-API-Dokumentation](https://blocksign.io/api/docs)
+Der [PHP-Kern](packages/php) enthält den BlockSign-REST-Client und die Freigabelogik der Shop-Module. Das [TypeScript-Paket](packages/typescript) enthält dieselben Freigaberegeln und den BlockSign-Client für Shopify. [BlockSign-API-Dokumentation](https://blocksign.io/api/docs)
 
 - PHP ab 8.1 mit `php tests/gate.php`
 - Node.js 24 mit `npm --prefix packages/typescript ci` und `npm --prefix packages/typescript test`

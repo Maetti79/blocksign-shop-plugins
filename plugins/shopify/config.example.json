@@ -1,0 +1,36 @@
+{
+  "shop": "your-store.myshopify.com",
+  "db": "/srv/blocksign/private/shopify.sqlite",
+  "files": "/srv/blocksign/private/pdfs",
+  "archive": "/srv/blocksign/private/archive",
+  "rules": [
+    {
+      "product": "1234567890",
+      "flow": "after_payment",
+      "mode": "download",
+      "download": "exposee.pdf",
+      "documents": [
+        {"file": "zustimmung.pdf", "placement": {"signature_level": "aes", "page": 1, "x": 50, "y": 60}}
+      ]
+    },
+    {
+      "variant": "2345678901",
+      "slug": "vereinsbeitritt",
+      "flow": "before_payment",
+      "mode": "membership",
+      "download": "mitgliederunterlagen.pdf",
+      "documents": [
+        {"file": "beitritt.pdf", "placement": {"signature_level": "fes", "page": 2, "x": 40, "y": 50}},
+        {"file": "sepa-mandat.pdf", "placement": {"signature_level": "aes", "page": 1, "x": 50, "y": 50}}
+      ]
+    },
+    {
+      "tag": "blocksign-versand",
+      "flow": "after_payment",
+      "mode": "shipment",
+      "documents": [
+        {"file": "empfangsbedingungen.pdf", "placement": {"signature_level": "pod"}}
+      ]
+    }
+  ]
+}
