@@ -71,7 +71,7 @@ class Configuration
 
     public static function get(string $key, ...$context): int|string
     {
-        if (str_starts_with($key, 'BLOCKSIGN_ESIGN_SHIPPING_FLAG_') || str_starts_with($key, 'BLOCKSIGN_ESIGN_PRODUCT_FLAG_') || str_starts_with($key, 'BLOCKSIGN_ESIGN_PRODUCT_FILES_')) {
+        if (str_starts_with($key, 'BLOCKSIGN_ESIGN_ACCESS_GROUP_') || str_starts_with($key, 'BLOCKSIGN_ESIGN_SHIPPING_FLAG_') || str_starts_with($key, 'BLOCKSIGN_ESIGN_PRODUCT_FLAG_') || str_starts_with($key, 'BLOCKSIGN_ESIGN_PRODUCT_FILES_')) {
             return self::$productFlags[$context[2]][$key] ?? 0;
         }
         return match ($key) {
@@ -81,6 +81,9 @@ class Configuration
             'BLOCKSIGN_ESIGN_SCOPE' => $GLOBALS['configured_scope'] ?? '',
             'BLOCKSIGN_ESIGN_DOCUMENTS' => 'mandate.pdf | FES | 3 | 25 | 40',
             'BLOCKSIGN_ESIGN_SIGNATURE' => '{"signature_level":"qes","page":2,"x":12.5,"y":0}',
+            'PS_UNIDENTIFIED_GROUP' => 1,
+            'PS_GUEST_GROUP' => 2,
+            'PS_CUSTOMER_GROUP' => 3,
             'PS_OS_CANCELED' => 6,
             'PS_OS_REFUND' => 7,
             'PS_OS_ERROR' => 8,
@@ -232,9 +235,26 @@ class Cart
 
 class Customer
 {
-    public int $id = 81;
-    public string $email = 'guest@example.com';
+    public static bool $guest = false;
+    public static string $accountEmail = 'guest@example.com';
+    public bool $active = true;
+    public bool $deleted = false;
+    public bool $is_guest;
+    public string $email;
+
+    public function __construct(public int $id = 81)
+    {
+        $this->is_guest = self::$guest;
+        $this->email = self::$accountEmail;
+    }
+
     public function isLogged(bool $allowGuest): bool { return $allowGuest; }
+
+    public function addGroups(array $groups): void
+    {
+        $GLOBALS['group_additions'][] = $groups;
+        Db::$groups[$this->id] = array_values(array_unique(array_merge(Db::$groups[$this->id] ?? [], $groups)));
+    }
 }
 
 class TestRedirect extends RuntimeException {}
@@ -250,6 +270,18 @@ class Db
     public const INSERT_IGNORE = 2;
     public static array $row = [];
     public static array $preorder = [];
+    public static array $groups = [81 => [3]];
+
+    public function getValue(string $query, bool $cache): int
+    {
+        if (str_contains($query, 'group_shop')) {
+            return str_contains($query, 'gs.id_group = 20 AND gs.id_shop = 2') ? 20 : 0;
+        }
+        if (preg_match('/WHERE id_customer = (\d+) AND id_group = (\d+)$/D', $query, $parts)) {
+            return in_array((int) $parts[2], self::$groups[(int) $parts[1]] ?? [], true) ? (int) $parts[2] : 0;
+        }
+        throw new RuntimeException('Unexpected customer-group query.');
+    }
 
     public function delete(string $table, string $where): bool
     {
@@ -582,3 +614,50 @@ BlocksignEsign::processOrder(42, $workflow);
 check($shipping_history_writes === 1, 'repeat processing wrote duplicate shipping history');
 $module->hookActionOrderStatusUpdate($ship);
 echo "PASS PrestaShop physical order hold and shipping release\n";
+
+Order::$storedShippingItems = [];
+Order::$storedShippingState = 0;
+Order::$paid = false;
+$order = new Order(42);
+$order->id_cart = 9;
+$module->hookActionAfterUpdateProductFormHandler([
+    'id' => 99, 'form_data' => ['options' => ['blocksign_esign_required' => false, 'blocksign_esign_access_group' => '20']],
+]);
+try {
+    $module->hookActionAfterUpdateProductFormHandler([
+        'id' => 99, 'form_data' => ['options' => ['blocksign_esign_required' => false, 'blocksign_esign_access_group' => '3']],
+    ]);
+    check(false, 'built-in customer group was accepted as membership group');
+} catch (TestModuleError $error) {
+    check(str_contains($error->getMessage(), 'custom BlockSign'), 'unexpected invalid group error');
+}
+Db::$row = [];
+$group_additions = [];
+$module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
+$access = json_decode(Db::$row['state'], true);
+check($access['access_groups'] === [99 => 20] && $access['downloads'] === [], 'membership product did not pin its own access group');
+BlocksignEsign::processOrder(42, $workflow);
+check($group_additions === [], 'unpaid order activated a group');
+
+foreach ($access['documents'] as &$document) {
+    $document['completed'] = true;
+}
+unset($document);
+Db::$row['state'] = json_encode($access);
+Db::$row['created_at'] = time() - 8 * 86400;
+Order::$paid = true;
+Customer::$guest = true;
+BlocksignEsign::processOrder(42, $workflow);
+check($group_additions === [] && Db::$row['next_attempt'] > 0, 'guest acquired access or could not resume');
+Customer::$guest = false;
+Customer::$accountEmail = 'other@example.com';
+BlocksignEsign::processOrder(42, $workflow);
+check($group_additions === [], 'different account email acquired access');
+Customer::$accountEmail = 'guest@example.com';
+BlocksignEsign::processOrder(42, $workflow);
+check($group_additions === [[20]] && Db::$groups[81] === [3, 20], 'confirmed account did not get group alongside existing membership');
+check(json_decode(Db::$row['state'], true)['access_activated'] && Db::$row['next_attempt'] === 0, 'access activation was not recorded');
+Db::$groups[81] = [3];
+BlocksignEsign::processOrder(42, $workflow);
+check($group_additions === [[20]], 'a retry re-added a manually removed group');
+echo "PASS PrestaShop account access activation and idempotent retry\n";

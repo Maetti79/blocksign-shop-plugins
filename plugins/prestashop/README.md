@@ -69,6 +69,14 @@ Nach Zahlungsbestätigung verarbeitet der Worker die Pflichtdokumente und setzt 
 
 Versand- und ERP-Integrationen müssen bei geschützten Bestellungen den Status **BlockSign: Versandbereit** abwarten. Ein Export direkt beim Zahlungseingang braucht eine eigene Sperre. Prüfe die Kombination aus Zahlungsmodul, PrestaShop und Versandsoftware im Testshop.
 
+## Zugang über eine Kundengruppe freigeben
+
+Lege eine eigene PrestaShop-Kundengruppe an und ordne ihr die vorgesehenen Zugriffsrechte zu. Trage ihre ID bei einem virtuellen Produkt ohne Varianten, nativen Download oder Anhang unter **Optionen → BlockSign customer access group ID** ein. Für dieses Produkt verwenden die Pflichtdokumente denselben Signaturablauf wie andere BlockSign-Produkte. Eine private Download-Datei ist dafür nicht erforderlich.
+
+Sobald Zahlung und Pflichtdokumente bestätigt sind, fügt der Worker das aktive Kundenkonto der Gruppe hinzu. Die Bestellung legt Konto und Gruppe fest. Die Konto-E-Mail muss mit der für die Bestätigung verwendeten Adresse übereinstimmen. Bei einem Gastkonto wartet der Worker bis zu sieben Tage auf die Umwandlung zum regulären Konto. Bestehende Gruppen und die Standardgruppe des Kontos bleiben erhalten.
+
+Die Freigabe ist eine einmalige Gruppenzuweisung. Preise und Zugriffsrechte werden nach den PrestaShop-Regeln der Gruppe angewendet. Eine spätere Erstattung oder ein Austritt entfernt die Gruppenzugehörigkeit nicht automatisch. Entziehe den Zugang in diesem Fall im Backoffice.
+
 ## Elektronischer Zustellnachweis
 
 Wähle **Proof of delivery** für das erste Pflichtdokument. Für ein zusätzliches PDF verwende die Kurzform `mitteilung.pdf | POD`. Bei einer Kategorie stellst du ihre ID voran, zum Beispiel `21 | mitteilung.pdf | POD`. BlockSign versendet das Dokument zur Empfangsbestätigung. Für diesen Vorgang sind keine Signaturposition oder Signaturstufe erforderlich.

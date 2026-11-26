@@ -71,8 +71,14 @@ class BlocksignEsignDocumentModuleFrontController extends ModuleFrontController
             $message = $links ? implode('<br>', $links) : 'All required confirmations are complete.';
         }
 
+        if ($allowed && !empty($state['access_groups'])) {
+            $message .= !empty($state['access_activated'])
+                ? '<br>Access has been activated for your customer account.'
+                : '<br>Access is awaiting activation for an active customer account with the same email address.';
+        }
+
         if (!BlocksignEsign::paymentReady($order, $state)) {
-            $message = 'The download is locked while payment is unconfirmed.';
+            $message = 'Fulfillment is on hold while payment is unconfirmed.';
         }
 
         header('Content-Type: text/html; charset=UTF-8');

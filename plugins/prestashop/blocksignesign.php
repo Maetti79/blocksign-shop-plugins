@@ -37,6 +37,8 @@ class BlocksignEsign extends Module
     private static array $approvedCarts = [];
     private const PRODUCT = 'BLOCKSIGN_ESIGN_PRODUCT';
     private const SCOPE = 'BLOCKSIGN_ESIGN_SCOPE';
+    private const ACCESS_GROUP = 'blocksign_esign_access_group';
+    private const ACCESS_GROUP_PREFIX = 'BLOCKSIGN_ESIGN_ACCESS_GROUP_';
     private const SHIPPING_FLAG = 'blocksign_esign_shipping';
     private const SHIPPING_FLAG_PREFIX = 'BLOCKSIGN_ESIGN_SHIPPING_FLAG_';
     private const SHIPPING_STATUS = 'BLOCKSIGN_ESIGN_SHIPPING_STATUS';
@@ -50,7 +52,7 @@ class BlocksignEsign extends Module
     public function __construct()
     {
         $this->name = 'blocksignesign';
-        $this->version = '0.11.0';
+        $this->version = '0.12.0';
         $this->author = 'BlockSign';
         $this->tab = 'administration';
         $this->ps_versions_compliancy = ['min' => '9.0.0', 'max' => _PS_VERSION_];
@@ -143,6 +145,14 @@ class BlocksignEsign extends Module
             'required' => false,
             'data' => self::shippingMarked($productId, $shopId),
         ]);
+        $builder->get('options')->add(self::ACCESS_GROUP, TextType::class, [
+            'label' => 'BlockSign customer access group ID',
+            'help' => 'For a virtual access product, enter the ID of a custom customer group in this shop. Leave blank to disable.',
+            'required' => false,
+            'empty_data' => '',
+            'data' => (string) (self::productAccessGroup($productId, $shopId) ?: ''),
+            'constraints' => [new Regex(pattern: '/^[0-9]+$/D')],
+        ]);
         $files = self::productFiles($productId, $shopId);
         foreach (ProductFiles::DEFAULTS as $kind => $default) {
             $builder->get('options')->add('blocksign_esign_' . $kind . '_file', TextType::class, [
@@ -173,6 +183,19 @@ class BlocksignEsign extends Module
             $enabledAt = $shippingFlag ? (self::shippingEnabledAt($productId, $shopId) ?: time()) : 0;
             if (!Configuration::updateValue(self::SHIPPING_FLAG_PREFIX . $productId, $enabledAt, false, null, $shopId)) {
                 throw new RuntimeException('Could not save the BlockSign shipping checkbox.');
+            }
+        }
+        $groupValue = $params['form_data']['options'][self::ACCESS_GROUP] ?? null;
+        if (is_string($groupValue)) {
+            $group = filter_var($groupValue === '' ? '0' : $groupValue, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+            if ($group === false || ($group && !self::accessGroupAllowed($group, $shopId))) {
+                throw new ModuleErrorException('Choose a custom BlockSign customer group associated with this shop.');
+            }
+            if ($group && (!(new Product($productId, false, null, $shopId))->is_virtual || ProductDownload::getIdFromIdProduct($productId))) {
+                throw new ModuleErrorException('BlockSign customer access requires a virtual product without a native download.');
+            }
+            if (!Configuration::updateValue(self::ACCESS_GROUP_PREFIX . $productId, $group, false, null, $shopId)) {
+                throw new ModuleErrorException('Could not save the BlockSign customer group.');
             }
         }
         $files = self::productFiles($productId, $shopId);
@@ -214,6 +237,29 @@ class BlocksignEsign extends Module
     private static function shippingEnabledAt(int $productId, int $shopId): int
     {
         return (int) Configuration::get(self::SHIPPING_FLAG_PREFIX . $productId, null, null, $shopId);
+    }
+
+    private static function productAccessGroup(int $productId, int $shopId): int
+    {
+        return (int) Configuration::get(self::ACCESS_GROUP_PREFIX . $productId, null, null, $shopId);
+    }
+
+    private static function accessGroupAllowed(int $group, int $shopId): bool
+    {
+        if ($group < 1) {
+            return false;
+        }
+        foreach (['PS_CUSTOMER_GROUP', 'PS_GUEST_GROUP', 'PS_UNIDENTIFIED_GROUP'] as $key) {
+            if ((int) Configuration::get($key, null, null, $shopId) === $group) {
+                return false;
+            }
+        }
+        return (bool) Db::getInstance()->getValue(
+            'SELECT gs.id_group FROM `' . _DB_PREFIX_ . 'group_shop` gs
+             INNER JOIN `' . _DB_PREFIX_ . 'group` g ON g.id_group = gs.id_group
+             WHERE gs.id_group = ' . $group . ' AND gs.id_shop = ' . $shopId,
+            false
+        );
     }
 
     public function getContent()
@@ -369,9 +415,14 @@ class BlocksignEsign extends Module
             $categories = $scope['mode'] === 'category' || $categoryDocuments ? $product->getCategories() : [];
             $flagged = $scope['mode'] === 'flagged' && self::productMarked($productId, $shopId);
             $shipping = !$product->is_virtual && self::shippingMarked($productId, $shopId);
-            if (!$shipping && (!$product->is_virtual
-                || !ProductScope::matches($scope, $configuredProduct, $productId, $categories, $flagged)
-                || ProductDownload::getIdFromIdProduct($productId) || $product->getAttachments($languageId))) {
+            $accessGroup = $product->is_virtual ? self::productAccessGroup($productId, $shopId) : 0;
+            if ($accessGroup && !self::accessGroupAllowed($accessGroup, $shopId)) {
+                throw new RuntimeException('The BlockSign customer group is unavailable for this shop.');
+            }
+            $protectedVirtual = $product->is_virtual && !ProductDownload::getIdFromIdProduct($productId)
+                && !$product->getAttachments($languageId);
+            if (!$shipping && (!$protectedVirtual
+                || (!$accessGroup && !ProductScope::matches($scope, $configuredProduct, $productId, $categories, $flagged)))) {
                 continue;
             }
             $products[$productId] = ProductFiles::snapshot(
@@ -383,8 +434,8 @@ class BlocksignEsign extends Module
                     $categories
                 ),
                 self::asset(...),
-                !$shipping
-            ) + ['shipping' => $shipping];
+                !$shipping && !$accessGroup
+            ) + ['shipping' => $shipping, 'access_group' => $accessGroup];
         }
         return $products;
     }
@@ -417,7 +468,11 @@ class BlocksignEsign extends Module
             throw new RuntimeException('Enter your customer details before requesting BlockSign confirmation.');
         }
 
-        $state = OrderFiles::combine($products) + ['timing' => 'before_order', 'signer_email' => $customer->email];
+        $state = OrderFiles::combine($products) + [
+            'timing' => 'before_order',
+            'signer_email' => $customer->email,
+            'customer_id' => (int) $customer->id,
+        ];
         $identity = [(int) $cart->id, (int) $cart->id_customer, (int) $cart->id_currency, (int) $cart->id_shop,
             (string) $cart->getOrderTotal(true, Cart::BOTH), $lines, $state];
         return [hash_hmac('sha256', json_encode($identity, JSON_THROW_ON_ERROR), _COOKIE_KEY_), $state];
@@ -550,10 +605,15 @@ class BlocksignEsign extends Module
                     $ids = array_map('intval', array_column($items, 'product_id'));
                     $downloads = array_intersect_key($approved['downloads'] ?? [], array_flip($ids));
                     $shipping = array_values(array_intersect($approved['shipping_products'] ?? [], $ids));
-                    if (!$downloads && !$shipping) {
+                    $accessGroups = array_intersect_key($approved['access_groups'] ?? [], array_flip($ids));
+                    if (!$downloads && !$shipping && !$accessGroups) {
                         continue;
                     }
-                    $state = array_replace($approved, ['downloads' => $downloads, 'shipping_products' => $shipping]);
+                    $state = array_replace($approved, [
+                        'downloads' => $downloads,
+                        'shipping_products' => $shipping,
+                        'access_groups' => $accessGroups,
+                    ]);
                 } else {
                     $products = self::fileSnapshots($items, $shopId, (int) $order->id_lang);
                     if (!$products) {
@@ -565,6 +625,7 @@ class BlocksignEsign extends Module
                     $state = OrderFiles::combine($products) + [
                         'timing' => $timing,
                         'signer_email' => $customer->email,
+                        'customer_id' => (int) $customer->id,
                     ];
                 }
                 $saved = Db::getInstance()->insert('blocksign_esign', [
@@ -632,7 +693,8 @@ class BlocksignEsign extends Module
                 return false;
             }
         }
-        $protected = OrderFiles::downloads($state) + array_fill_keys($state['shipping_products'] ?? [], true);
+        $protected = OrderFiles::downloads($state) + array_fill_keys($state['shipping_products'] ?? [], true)
+            + ($state['access_groups'] ?? []);
         if (!$protected) {
             return false;
         }
@@ -724,6 +786,45 @@ class BlocksignEsign extends Module
         if (!$history->add()) {
             throw new RuntimeException('Could not save the shipping status history.');
         }
+    }
+
+    private static function activateAccess(Order $order, array $state): bool
+    {
+        if (!self::downloadAllowed($order, $state)) {
+            return false;
+        }
+        $customerId = (int) $order->id_customer;
+        $customer = new Customer($customerId);
+        if ($customerId !== ($state['customer_id'] ?? 0) || !Validate::isLoadedObject($customer) || !$customer->active
+            || $customer->deleted || $customer->is_guest || strcasecmp($customer->email, $state['signer_email']) !== 0) {
+            return false;
+        }
+
+        $shopId = (int) $order->id_shop;
+        $groups = array_unique($state['access_groups']);
+        foreach ($groups as $group) {
+            if (!self::accessGroupAllowed($group, $shopId)) {
+                throw new RuntimeException('A BlockSign customer group is no longer available.');
+            }
+        }
+
+        $db = Db::getInstance();
+        $missing = [];
+        foreach ($groups as $group) {
+            $query = 'SELECT id_group FROM `' . _DB_PREFIX_ . 'customer_group` WHERE id_customer = ' . $customerId . ' AND id_group = ' . $group;
+            if (!$db->getValue($query, false)) {
+                $missing[$group] = $query;
+            }
+        }
+        if ($missing) {
+            $customer->addGroups(array_keys($missing));
+            foreach ($missing as $query) {
+                if (!$db->getValue($query, false)) {
+                    throw new RuntimeException('Could not add the account to a BlockSign customer group.');
+                }
+            }
+        }
+        return true;
     }
 
     public static function asset(string $name): string
@@ -899,6 +1000,24 @@ class BlocksignEsign extends Module
             } catch (Throwable $error) {
                 PrestaShopLogger::addLog('BlockSign could not release the order for shipping.', 2, null, 'Order', $id);
                 $retry = time() - $started < 604800;
+            }
+        }
+        if ($validOrder && !empty($state['access_groups']) && empty($state['access_activated'])
+            && RequiredSignatures::complete($state) && time() - ($state['access_started_at'] ?? time()) < 604800) {
+            try {
+                if (!isset($state['access_started_at'])) {
+                    $state['access_started_at'] = time();
+                    self::updateRow($id, ['state' => pSQL(json_encode($state, JSON_THROW_ON_ERROR), true)]);
+                }
+                if (self::activateAccess(new Order($id), $state)) {
+                    $state['access_activated'] = true;
+                    self::updateRow($id, ['state' => pSQL(json_encode($state, JSON_THROW_ON_ERROR), true)]);
+                } else {
+                    $retry = true;
+                }
+            } catch (Throwable $error) {
+                PrestaShopLogger::addLog('BlockSign could not activate customer access.', 2, null, 'Order', $id);
+                $retry = true;
             }
         }
         if ($validOrder && $archive && RequiredSignatures::complete($state) && time() - $started < 604800) {

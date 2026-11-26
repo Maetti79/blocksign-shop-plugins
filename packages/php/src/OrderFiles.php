@@ -11,6 +11,7 @@ final class OrderFiles
         $downloads = [];
         $documents = [];
         $shipping = [];
+        $accessGroups = [];
         foreach ($products as $id => $files) {
             if (isset($files['download_file'], $files['download_hash'])) {
                 $downloads[$id] = [
@@ -21,6 +22,9 @@ final class OrderFiles
             if (!empty($files['shipping'])) {
                 $shipping[] = (int) $id;
             }
+            if (!empty($files['access_group'])) {
+                $accessGroups[$id] = $files['access_group'];
+            }
             foreach ($files['documents'] as $document) {
                 $key = json_encode([$document['file'], $document['agreement_hash'], $document['placement']], JSON_THROW_ON_ERROR);
                 $documents[$key] ??= $document;
@@ -28,7 +32,13 @@ final class OrderFiles
         }
 
         $state = ['downloads' => $downloads, 'documents' => array_values($documents)];
-        return $shipping ? $state + ['shipping_products' => $shipping] : $state;
+        if ($shipping) {
+            $state['shipping_products'] = $shipping;
+        }
+        if ($accessGroups) {
+            $state['access_groups'] = $accessGroups;
+        }
+        return $state;
     }
 
     public static function downloads(array $state): array
