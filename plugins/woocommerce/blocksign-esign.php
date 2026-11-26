@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BlockSign eSign for WooCommerce
  * Description: Collect BlockSign confirmations and release protected WooCommerce orders.
- * Version: 0.16.0
+ * Version: 0.17.0
  * Requires PHP: 8.1
  * Requires Plugins: woocommerce
  * License: GPL-3.0-or-later
@@ -13,7 +13,7 @@ declare(strict_types=1);
 namespace BlockSign\WooCommerce;
 
 use BlockSign\ESign\Client;
-use BlockSign\ESign\Gate;
+use BlockSign\ESign\DocumentSchedule;
 use BlockSign\ESign\EvidenceArchive;
 use BlockSign\ESign\ProductScope;
 use BlockSign\ESign\ProductFiles;
@@ -49,6 +49,7 @@ require_once __DIR__ . '/core/OrderFiles.php';
 require_once __DIR__ . '/core/CategoryDocuments.php';
 require_once __DIR__ . '/core/EvidenceArchive.php';
 require_once __DIR__ . '/core/ShopConfiguration.php';
+require_once __DIR__ . '/core/DocumentSchedule.php';
 
 const META = '_blocksign_esign';
 const JOB = 'blocksign_esign_check';
@@ -75,6 +76,18 @@ function paid_timing(): string
 {
     $timing = get_option('blocksign_esign_paid_timing');
     return in_array($timing, ['before_order', 'before_payment'], true) ? $timing : 'after_payment';
+}
+
+function timing_rules(): array
+{
+    return DocumentSchedule::parse((string) get_option('blocksign_esign_timing_rules', ''), true);
+}
+
+function preorder_configured(): bool
+{
+    $rules = timing_rules();
+    return paid_timing() === 'before_order' || in_array('before_order', $rules['product'] ?? [], true)
+        || in_array('before_order', $rules['category'] ?? [], true);
 }
 
 function signature_settings(): array
@@ -157,6 +170,21 @@ add_action('admin_init', static function (): void {
         'type' => 'string',
         'sanitize_callback' => static fn ($value): string => in_array($value, ['before_order', 'before_payment'], true) ? $value : 'after_payment',
     ]);
+    register_setting('blocksign_esign', 'blocksign_esign_timing_rules', [
+        'type' => 'string',
+        'sanitize_callback' => static function ($value): string {
+            try {
+                if (!is_string($value)) {
+                    throw new InvalidArgumentException('Enter one timing per product or category.');
+                }
+                DocumentSchedule::parse($value, true);
+                return trim($value);
+            } catch (InvalidArgumentException $error) {
+                add_settings_error('blocksign_esign_timing_rules', 'invalid_timing_rules', $error->getMessage());
+                return (string) get_option('blocksign_esign_timing_rules', '');
+            }
+        },
+    ]);
     register_setting('blocksign_esign', 'blocksign_esign_product', [
         'type' => 'integer',
         'sanitize_callback' => 'absint',
@@ -185,6 +213,8 @@ add_action('admin_menu', static function (): void {
         printf('<label for="blocksign_esign_product">Protected product ID</label> <input id="blocksign_esign_product" type="number" min="0" name="blocksign_esign_product" value="%d">', configured_product());
         printf('<p><label for="blocksign-paid-timing">Signature timing</label> <select id="blocksign-paid-timing" name="blocksign_esign_paid_timing"><option value="after_payment"%s>After payment</option><option value="before_payment"%s>Before payment</option><option value="before_order"%s>Before order</option></select></p>',
             selected(paid_timing(), 'after_payment', false), selected(paid_timing(), 'before_payment', false), selected(paid_timing(), 'before_order', false));
+        printf('<p><label for="blocksign-timing-rules">Signature timing by product or category</label><br><textarea id="blocksign-timing-rules" name="blocksign_esign_timing_rules" rows="5" cols="70">%s</textarea><br><small>Example: product | 42 | before_order</small></p>',
+            esc_textarea(get_option('blocksign_esign_timing_rules', '')));
         $settings = signature_settings();
         echo '<p><label for="blocksign-signature-level">Signature level or proof of delivery</label> <select id="blocksign-signature-level" name="blocksign_esign_signature[signature_level]">';
         foreach (['aes' => 'EES', 'fes' => 'FES', 'qes' => 'QES', 'pod' => 'Proof of delivery'] as $value => $label) {
@@ -324,7 +354,7 @@ function snapshot(WC_Order $order, bool $preview = false): void
             || strcasecmp($existing['signer_email'], $order->get_billing_email()) !== 0) {
             throw new RuntimeException('The protected order payment requirement and email cannot be changed.');
         }
-        if ($timing === 'before_order' && isset($existing['confirmed_total'])
+        if (DocumentSchedule::has($existing, 'before_order') && isset($existing['confirmed_total'])
             && ($existing['confirmed_total'] !== preorder_total($total)
                 || $existing['confirmed_currency'] !== get_woocommerce_currency()
                 || ($order->has_status(['checkout-draft']) && ($existing['confirmed_expires'] ?? 0) <= time()))) {
@@ -398,19 +428,32 @@ function snapshot(WC_Order $order, bool $preview = false): void
     $placement = signature_settings();
     $additional = RequiredSignatures::parseAdditional(get_option('blocksign_esign_documents', ''));
     $categoryDocuments = CategoryDocuments::parse(get_option('blocksign_esign_category_documents', ''));
+    $rules = timing_rules();
+    if ($rules) {
+        ksort($products);
+    }
     foreach ($products as $id => $product) {
+        $categories = $categoryDocuments || isset($rules['category']) ? $product->get_category_ids() : [];
         $products[$id] = ProductFiles::snapshot(
             [
                 'agreement' => $product->get_meta('_blocksign_esign_agreement_file'),
                 'download' => $product->get_meta('_blocksign_esign_download_file'),
             ],
             $placement,
-            CategoryDocuments::forProduct($additional, $categoryDocuments, $categoryDocuments ? $product->get_category_ids() : []),
+            CategoryDocuments::forProduct($additional, $categoryDocuments, $categories),
             asset(...),
             !isset($shipping[$id]) && !isset($access[$id])
         );
+        if ($rules) {
+            $products[$id]['timing'] = DocumentSchedule::resolve($rules, $id, $categories, $configuredTiming, $total === 0.0);
+        }
     }
-    $state = OrderFiles::combine($products) + [
+    $state = OrderFiles::combine($products);
+    if ($rules) {
+        $timing = DocumentSchedule::has($state, 'before_payment') ? 'before_payment'
+            : (DocumentSchedule::has($state, 'before_order') ? 'before_order' : ($total === 0.0 ? 'without_payment' : 'after_payment'));
+    }
+    $state += [
         'cart' => $cart,
         'timing' => $timing,
         'signer_email' => $order->get_billing_email(),
@@ -422,11 +465,11 @@ function snapshot(WC_Order $order, bool $preview = false): void
         $state['access_pages'] = $access;
         $state['access_customer_id'] = (int) $order->get_customer_id();
     }
-    if ($timing === 'before_order' && !$preview) {
+    if (DocumentSchedule::has($state, 'before_order') && !$preview) {
         $state = consume_preorder($state, $total);
     }
     $order->update_meta_data(META, $state);
-    if ($timing === 'before_payment') {
+    if ($timing === 'before_payment' && !$preview) {
         // Suppress gateway instructions until the buyer actually submits the order-pay form.
         $order->set_payment_method('');
     }
@@ -457,7 +500,7 @@ function consume_preorder(array $state, float $total): array
     }
     try {
         $pending = get_transient('bs_esign_pre_' . $key);
-        if (!$pending || !RequiredSignatures::complete($pending['state']) || !delete_transient('bs_esign_pre_' . $key)) {
+        if (!$pending || !DocumentSchedule::allows('order', $pending['state']) || !delete_transient('bs_esign_pre_' . $key)) {
             throw new RuntimeException('Confirm all required BlockSign documents before placing the order.');
         }
         return $pending['state'] + [
@@ -481,7 +524,7 @@ function request_preorder(array $state, float $total): bool
     try {
         $pending = get_transient($name);
         if ($pending) {
-            return RequiredSignatures::complete($pending['state']);
+            return DocumentSchedule::allows('order', $pending['state']);
         }
         if (!set_transient($name, ['state' => $state, 'expires' => time() + WEEK_IN_SECONDS], WEEK_IN_SECONDS)) {
             throw new RuntimeException('Could not start BlockSign signing. Please try again.');
@@ -494,7 +537,7 @@ function request_preorder(array $state, float $total): bool
 }
 
 add_action('woocommerce_after_checkout_validation', static function (array $data, \WP_Error $errors): void {
-    if (paid_timing() !== 'before_order' || $errors->has_errors()) {
+    if ($errors->has_errors() || !preorder_configured()) {
         return;
     }
     try {
@@ -513,7 +556,7 @@ add_action('woocommerce_after_checkout_validation', static function (array $data
         }
         snapshot($draft, true);
         $state = $draft->get_meta(META);
-        if (!$state) {
+        if (!$state || !DocumentSchedule::has($state, 'before_order')) {
             return;
         }
 
@@ -541,9 +584,10 @@ add_action(PREORDER_JOB, static function (string $key): void {
             return;
         }
         try {
-            $retry = RequiredSignatures::advance(
+            $retry = DocumentSchedule::advance(
                 new SignatureWorkflow(client()),
                 $pending['state'],
+                ['before_order'],
                 static function (array $state) use (&$pending, $name): void {
                     $pending['state'] = $state;
                     $remaining = $pending['expires'] - time();
@@ -577,7 +621,7 @@ add_action('woocommerce_store_api_checkout_update_order_from_request', static fu
             }
         }
     }
-    if (paid_timing() !== 'before_order' || $order->get_meta(META)) {
+    if (!preorder_configured() || $order->get_meta(META)) {
         return;
     }
     try {
@@ -589,6 +633,9 @@ add_action('woocommerce_store_api_checkout_update_order_from_request', static fu
 
         // Only a completed proof may remain attached when WooCommerce persists this draft.
         $order->delete_meta_data(META);
+        if (!DocumentSchedule::has($state, 'before_order')) {
+            return;
+        }
         $total = (float) $order->get_total();
         if (!request_preorder($state, $total)) {
             throw new RuntimeException(PREORDER_NOTICE);
@@ -603,7 +650,7 @@ add_action('woocommerce_store_api_checkout_order_processed', static function (WC
     try {
         snapshot($order);
         $stored = $order->get_meta(META);
-        if (($stored['timing'] ?? '') === 'before_order' && !payment_allowed($order, $stored)) {
+        if ($stored && !DocumentSchedule::allows('order', $stored, strcasecmp($stored['signer_email'], $order->get_billing_email()) === 0)) {
             throw new RuntimeException(PREORDER_NOTICE);
         }
     } catch (RuntimeException | InvalidArgumentException $error) {
@@ -656,7 +703,7 @@ add_filter('rest_request_after_callbacks', static function ($response, array $ha
 function enqueue(WC_Order $order): void
 {
     $state = $order->get_meta(META);
-    if ($state && ((can_start_signatures($order, $state) && !RequiredSignatures::complete($state))
+    if ($state && ((active_signature_timings($order, $state) && !RequiredSignatures::complete($state))
         || (($state['timing'] ?? '') === 'before_order' && defined('BLOCKSIGN_ESIGN_ARCHIVE') && BLOCKSIGN_ESIGN_ARCHIVE))) {
         as_enqueue_async_action(JOB, [$order->get_id()], GROUP, true);
     }
@@ -679,21 +726,22 @@ add_action('woocommerce_checkout_order_processed', static function (int $id, arr
     exit;
 }, 1, 3);
 
-function can_start_signatures(WC_Order $order, array $state): bool
+function active_signature_timings(WC_Order $order, array $state): array
 {
     if (($state['timing'] ?? '') === 'before_payment') {
-        return (float) $order->get_total() > 0.0 && $order->needs_payment() && !$order->is_paid();
+        if ((float) $order->get_total() > 0.0 && $order->needs_payment() && !$order->is_paid()) {
+            return RequiredSignatures::complete(DocumentSchedule::view($state, ['before_payment'])) ? [] : ['before_payment'];
+        }
+        if (empty($state['scheduled_documents'])) {
+            return [];
+        }
     }
-    return payment_ready($order, $state);
+    return payment_ready($order, $state) ? ['after_payment', 'without_payment'] : [];
 }
 
 function payment_allowed(WC_Order $order, array $state): bool
 {
-    return Gate::allows('payment', [[
-        'timing' => $state['timing'] ?? 'without_payment',
-        'completed' => RequiredSignatures::complete($state)
-            && strcasecmp($state['signer_email'] ?? '', $order->get_billing_email()) === 0,
-    ]]);
+    return DocumentSchedule::allows('payment', $state, strcasecmp($state['signer_email'] ?? '', $order->get_billing_email()) === 0);
 }
 
 add_action('woocommerce_before_pay_action', static function (WC_Order $order): void {
@@ -709,7 +757,7 @@ add_action('woocommerce_before_pay_action', static function (WC_Order $order): v
 function enqueue_paid_order(int $id): void
 {
     $order = wc_get_order($id);
-    if ($order && ($order->get_meta(META)['timing'] ?? '') === 'after_payment') {
+    if ($order && ($state = $order->get_meta(META)) && (float) $order->get_total() > 0 && payment_ready($order, $state)) {
         enqueue($order);
     }
 }
@@ -835,13 +883,15 @@ function persist(WC_Order $order, array $state): void
 
 function advance(WC_Order $order, array $state): bool
 {
-    if (!can_start_signatures($order, $state)) {
+    $timings = active_signature_timings($order, $state);
+    if (!$timings) {
         return false;
     }
 
-    return RequiredSignatures::advance(
+    return DocumentSchedule::advance(
         new SignatureWorkflow(client()),
         $state,
+        $timings,
         static fn (array $next) => persist($order, $next),
         static fn (string $file) => file_get_contents(asset($file), false, null, 0, 10 * 1024 * 1024 + 1)
     );
@@ -885,7 +935,7 @@ add_action(JOB, static function (int $id): void {
             }
         }
 
-        $since = ($state['timing'] ?? '') === 'after_payment' ? $order->get_date_paid() : $order->get_date_created();
+        $since = (float) $order->get_total() > 0.0 && payment_ready($order, $state) ? $order->get_date_paid() : $order->get_date_created();
         if ($retry && $since && time() - $since->getTimestamp() < WEEK_IN_SECONDS) {
             as_schedule_single_action(time() + 120, JOB, [$id], GROUP);
         }
@@ -897,7 +947,7 @@ add_action(JOB, static function (int $id): void {
 function download_allowed(WC_Order $order, array $state): bool
 {
     return $state && payment_ready($order, $state) && !$order->has_status(['cancelled', 'refunded', 'failed', 'checkout-draft'])
-        && Gate::allows('fulfillment', [['timing' => $state['timing'] ?? 'without_payment', 'completed' => RequiredSignatures::complete($state)]]);
+        && DocumentSchedule::allows('fulfillment', $state);
 }
 
 function show_order_state(WC_Order $order): void

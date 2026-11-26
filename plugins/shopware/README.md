@@ -37,7 +37,7 @@ Trage zusätzliche Pflichtdokumente zeilenweise ein, etwa `mandate.pdf | FES | 2
 }
 ```
 
-Verwende für PDF-Namen ASCII-Buchstaben, Ziffern, Punkte, Bindestriche und Unterstriche. Kategorie-Regeln werden in der angegebenen Reihenfolge angewandt. Produktregeln überschreiben die geerbten Werte. `kind` kann `download`, `shipping` oder `membership` sein. Identische Pflichtdokumente mit identischen Einstellungen werden pro Warenkorb zusammengefasst.
+Verwende für PDF-Namen ASCII-Buchstaben, Ziffern, Punkte, Bindestriche und Unterstriche. Produktregeln überschreiben die geerbten Werte. Treffen mehrere Kategorieregeln zu, gilt beim Zeitpunkt die früheste Regel. Die übrigen Kategorie-Einstellungen werden in der angegebenen Reihenfolge angewandt. `kind` kann `download`, `shipping` oder `membership` sein. Identische Pflichtdokumente mit identischen Einstellungen werden einmal zum frühesten erforderlichen Zeitpunkt bestätigt.
 
 ## Freigabeverhalten
 

@@ -20,8 +20,8 @@ BlockSign eSign verknüpft Shop-Bestellungen mit elektronischen Unterschriften. 
 | Bestätigung nach Zahlungseingang | Ja | Ja | Ja | Ja |
 | Bestätigung vor Zahlung | Ja · Bestellzahlungsseite oder vor Bestellabgabe | Teilweise · Vorkasse und Scheck | Ja · vor Bestellabgabe im Standard-Checkout | Ja · eigener Kaufablauf mit Shopify-Rechnungslink |
 | Bestätigung vor verbindlicher Bestellabgabe im regulären Checkout | Ja · klassischer Checkout und Checkout Blocks | Teilweise · 0 €, Vorkasse und Scheck | Ja · Standard-Checkout | Offen |
-| Zeitpunkt pro Produkt oder Kategorie | Offen · Einstellung pro Shop | Offen · Einstellung pro Shop | Ja · Produkt- und Kategorieregeln | Teilweise · Regeln je Variante, Produkt und Tag. Vor Zahlung je Variante über Bestellentwurf |
-| Früh und spät zu bestätigende Dokumente im selben Warenkorb | Offen · gemeinsamer Zeitpunkt | Offen · gemeinsamer Zeitpunkt | Ja | Teilweise · nach Zahlung im regulären Warenkorb. Vor Zahlung als Einzelvariante |
+| Zeitpunkt pro Produkt oder Kategorie | Ja · vor Bestellung, vor Zahlung oder nach Zahlung | Ja · vor Bestellung oder nach Zahlung | Ja · Produkt- und Kategorieregeln | Teilweise · Regeln je Variante, Produkt und Tag. Vor Zahlung je Variante über Bestellentwurf |
+| Früh und spät zu bestätigende Dokumente im selben Warenkorb | Ja · drei getrennte Phasen | Ja · vor Bestellung und nach Zahlung im unterstützten Checkout | Ja · vor Bestellung und nach Zahlung | Teilweise · nach Zahlung im regulären Warenkorb. Vor Zahlung als Einzelvariante |
 | Geschützter PDF-Download nach Bestätigung | Ja | Ja | Ja | Ja · im Käuferkonto |
 | Versand im Shop bis zur Bestätigung sperren | Ja · Bestellstatus | Ja · Versandstatus | Ja · Lieferstatus | Teilweise · Freigabe-Tag für Versand-Workflows |
 | Automatischer Mitglieder- oder Kundenzugang | Ja · private Seite | Ja · Kundengruppe | Ja · Kundengruppe | Teilweise · private Mitglieder-PDFs |
@@ -30,6 +30,8 @@ BlockSign eSign verknüpft Shop-Bestellungen mit elektronischen Unterschriften. 
 | End-to-End-Abnahme mit BlockSign und echtem Zahlungsanbieter im Testmodus | Offen | Offen | Offen | Offen |
 
 Für die Vorab-Bestätigung mit Kreditkarte, PayPal oder SEPA-Lastschrift in PrestaShop steht die Online-Zahlungsanbindung aus. In Shopify legt der Shop die verfügbaren Zahlungsmethoden für den Rechnungslink fest.
+
+In WooCommerce, PrestaShop und Shopware können Dokumente desselben Warenkorbs zu verschiedenen Zeitpunkten bestätigt werden. Bei einer 0‑€‑Bestellung können die dafür vorgesehenen Dokumente direkt nach Bestellabgabe starten. Auslieferung und Zugriff setzen die vollständige Bestätigung der Pflichtdokumente und bei einem positiven Bestellwert die Zahlung voraus.
 
 Die Einrichtung steht in den Shop-READMEs. [WooCommerce](plugins/woocommerce/README.md) · [PrestaShop 9](plugins/prestashop/README.md) · [Shopware 6.7](plugins/shopware/README.md) · [Shopify](plugins/shopify/README.md)
 

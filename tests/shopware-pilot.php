@@ -46,7 +46,7 @@ namespace Shopware\Core\Content\Product {
         public function getCategories(): object
         {
             return new class {
-                public function has(string $id): bool { return $id === 'category'; }
+                public function has(string $id): bool { return in_array($id, ['category', 'later-category'], true); }
             };
         }
     }
@@ -111,7 +111,7 @@ namespace {
     use Shopware\Core\System\SystemConfig\SystemConfigService;
 
     $plugin = $argv[1] ?? 'build/BlockSignEsign';
-    foreach (['ProductFiles', 'RequiredSignatures', 'SignatureSettings', 'ShopConfiguration'] as $class) {
+    foreach (['ProductFiles', 'RequiredSignatures', 'SignatureSettings', 'ShopConfiguration', 'DocumentSchedule'] as $class) {
         require "$plugin/src/Core/$class.php";
     }
     require "$plugin/src/Checkout/Rules.php";
@@ -132,7 +132,10 @@ namespace {
         'pdfDirectory' => $dir,
         'level' => 'fes',
         'productRules' => json_encode([
-            'categories' => ['category' => ['kind' => 'shipping', 'timing' => 'before_order', 'agreement' => 'early.pdf']],
+            'categories' => [
+                'category' => ['kind' => 'shipping', 'timing' => 'before_order', 'agreement' => 'early.pdf'],
+                'later-category' => ['timing' => 'after_payment'],
+            ],
             'products' => ['late' => ['kind' => 'download', 'timing' => 'after_payment', 'agreement' => 'late.pdf', 'documents' => 'mandate.pdf | POD']],
         ], JSON_THROW_ON_ERROR),
     ]);

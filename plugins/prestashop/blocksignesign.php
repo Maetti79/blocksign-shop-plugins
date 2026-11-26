@@ -1,7 +1,7 @@
 <?php
 
 use BlockSign\ESign\Client;
-use BlockSign\ESign\Gate;
+use BlockSign\ESign\DocumentSchedule;
 use BlockSign\ESign\EvidenceArchive;
 use BlockSign\ESign\ProductScope;
 use BlockSign\ESign\ProductFiles;
@@ -31,10 +31,12 @@ require_once __DIR__ . '/core/OrderFiles.php';
 require_once __DIR__ . '/core/CategoryDocuments.php';
 require_once __DIR__ . '/core/EvidenceArchive.php';
 require_once __DIR__ . '/core/ShopConfiguration.php';
+require_once __DIR__ . '/core/DocumentSchedule.php';
 
 class BlocksignEsign extends Module
 {
     private const PREORDER = 'BLOCKSIGN_ESIGN_PREORDER';
+    private const TIMING_RULES = 'BLOCKSIGN_ESIGN_TIMING_RULES';
     private const OFFLINE_MODULES = ['ps_wirepayment', 'ps_checkpayment'];
     private static array $approvedCarts = [];
     private const PRODUCT = 'BLOCKSIGN_ESIGN_PRODUCT';
@@ -55,7 +57,7 @@ class BlocksignEsign extends Module
     public function __construct()
     {
         $this->name = 'blocksignesign';
-        $this->version = '0.13.0';
+        $this->version = '0.14.0';
         $this->author = 'BlockSign';
         $this->tab = 'administration';
         $this->ps_versions_compliancy = ['min' => '9.0.0', 'max' => _PS_VERSION_];
@@ -296,6 +298,11 @@ class BlocksignEsign extends Module
                     throw new InvalidArgumentException('Enter one category document per line.');
                 }
                 CategoryDocuments::parse($categoryDocuments);
+                $timingRules = Tools::getValue(self::TIMING_RULES, '');
+                if (!is_string($timingRules)) {
+                    throw new InvalidArgumentException('Enter one timing per product or category.');
+                }
+                DocumentSchedule::parse($timingRules);
                 $credentials = $_POST['blocksign_connection'] ?? null;
                 $newConnection = $canManageConnection && is_array($credentials)
                     ? ShopConfiguration::credentials($credentials, $connection['key'] ?? '', [_PS_ROOT_DIR_, $_SERVER['DOCUMENT_ROOT'] ?? '']) : null;
@@ -303,6 +310,7 @@ class BlocksignEsign extends Module
                     || !Configuration::updateValue(self::SCOPE, json_encode($scope, JSON_THROW_ON_ERROR))
                     || !Configuration::updateValue(self::DOCUMENTS, trim($documents))
                     || !Configuration::updateValue(self::CATEGORY_DOCUMENTS, trim($categoryDocuments))
+                    || !Configuration::updateValue(self::TIMING_RULES, trim($timingRules))
                     || !Configuration::updateValue(self::SIGNATURE, json_encode($placement, JSON_THROW_ON_ERROR))
                     || !Configuration::updateValue(self::PRODUCT, $productId)) {
                     throw new RuntimeException('Could not save the BlockSign settings.');
@@ -356,6 +364,7 @@ class BlocksignEsign extends Module
             'blocksign_category' => $scope['category_id'],
             self::DOCUMENTS => (string) Configuration::get(self::DOCUMENTS),
             self::CATEGORY_DOCUMENTS => (string) Configuration::get(self::CATEGORY_DOCUMENTS),
+            self::TIMING_RULES => (string) Configuration::get(self::TIMING_RULES),
             'blocksign_level' => $settings['signature_level'],
             'blocksign_page' => $settings['page'],
             'blocksign_x' => $settings['x'],
@@ -372,6 +381,12 @@ class BlocksignEsign extends Module
                     ['id' => 'blocksign_preorder_on', 'value' => 1, 'label' => 'Yes'],
                     ['id' => 'blocksign_preorder_off', 'value' => 0, 'label' => 'No'],
                 ],
+            ], [
+                'type' => 'textarea',
+                'name' => self::TIMING_RULES,
+                'label' => 'Signature timing by product or category',
+                'desc' => 'Example: product | 42 | before_order',
+                'rows' => 5,
             ], [
                 'type' => 'select',
                 'name' => 'blocksign_scope',
@@ -441,20 +456,34 @@ class BlocksignEsign extends Module
         return $stored ? SignatureSettings::validate(json_decode($stored, true, 512, JSON_THROW_ON_ERROR)) : SignatureSettings::DEFAULTS;
     }
 
-    private static function fileSnapshots(array $items, int $shopId, int $languageId): array
+    private static function timingRules(int $shopId): array
+    {
+        return DocumentSchedule::parse((string) Configuration::get(self::TIMING_RULES, null, null, $shopId));
+    }
+
+    private static function preorderConfigured(int $shopId): bool
+    {
+        $rules = self::timingRules($shopId);
+        return Configuration::get(self::PREORDER, null, null, $shopId)
+            || in_array('before_order', $rules['product'] ?? [], true) || in_array('before_order', $rules['category'] ?? [], true);
+    }
+
+    private static function fileSnapshots(array $items, int $shopId, int $languageId, bool $free): array
     {
         $scope = self::productScope($shopId);
         $configuredProduct = (int) Configuration::get(self::PRODUCT, null, null, $shopId);
         $products = [];
         $placement = $additional = null;
         $categoryDocuments = CategoryDocuments::parse((string) Configuration::get(self::CATEGORY_DOCUMENTS, null, null, $shopId));
+        $rules = self::timingRules($shopId);
+        $default = Configuration::get(self::PREORDER, null, null, $shopId) ? 'before_order' : 'after_payment';
         foreach ($items as $item) {
             $productId = (int) $item['product_id'];
             if (isset($products[$productId]) || (int) ($item['product_attribute_id'] ?? 0) !== 0) {
                 continue;
             }
             $product = new Product($productId, false, null, $shopId);
-            $categories = $scope['mode'] === 'category' || $categoryDocuments ? $product->getCategories() : [];
+            $categories = $scope['mode'] === 'category' || $categoryDocuments || isset($rules['category']) ? $product->getCategories() : [];
             $flagged = $scope['mode'] === 'flagged' && self::productMarked($productId, $shopId);
             $shipping = !$product->is_virtual && self::shippingMarked($productId, $shopId);
             $accessGroup = $product->is_virtual ? self::productAccessGroup($productId, $shopId) : 0;
@@ -478,6 +507,12 @@ class BlocksignEsign extends Module
                 self::asset(...),
                 !$shipping && !$accessGroup
             ) + ['shipping' => $shipping, 'access_group' => $accessGroup];
+            if ($rules) {
+                $products[$productId]['timing'] = DocumentSchedule::resolve($rules, $productId, $categories, $default, $free);
+            }
+        }
+        if ($rules) {
+            ksort($products);
         }
         return $products;
     }
@@ -486,7 +521,7 @@ class BlocksignEsign extends Module
     {
         $cart = $this->context->cart;
         if (!$cart instanceof Cart || !(int) $cart->id
-            || !Configuration::get(self::PREORDER, null, null, (int) $cart->id_shop)) {
+            || !self::preorderConfigured((int) $cart->id_shop)) {
             return null;
         }
         $items = [];
@@ -499,8 +534,13 @@ class BlocksignEsign extends Module
             $lines[] = [(int) $item['id_product'], (int) ($item['id_product_attribute'] ?? 0), (int) $item['cart_quantity']];
         }
         sort($lines);
-        $products = self::fileSnapshots($items, (int) $cart->id_shop, (int) $cart->id_lang);
+        $total = $cart->getOrderTotal(true, Cart::BOTH);
+        $products = self::fileSnapshots($items, (int) $cart->id_shop, (int) $cart->id_lang, (float) $total === 0.0);
         if (!$products) {
+            return null;
+        }
+        $state = OrderFiles::combine($products) + ['timing' => 'before_order'];
+        if (!DocumentSchedule::has($state, 'before_order')) {
             return null;
         }
 
@@ -510,13 +550,12 @@ class BlocksignEsign extends Module
             throw new RuntimeException('Enter your customer details before requesting BlockSign confirmation.');
         }
 
-        $state = OrderFiles::combine($products) + [
-            'timing' => 'before_order',
+        $state += [
             'signer_email' => $customer->email,
             'customer_id' => (int) $customer->id,
         ];
         $identity = [(int) $cart->id, (int) $cart->id_customer, (int) $cart->id_currency, (int) $cart->id_shop,
-            (string) $cart->getOrderTotal(true, Cart::BOTH), $lines, $state];
+            (string) $total, $lines, $state];
         return [hash_hmac('sha256', json_encode($identity, JSON_THROW_ON_ERROR), _COOKIE_KEY_), $state];
     }
 
@@ -535,7 +574,7 @@ class BlocksignEsign extends Module
             return null;
         }
         $state = json_decode($row['state'], true, 512, JSON_THROW_ON_ERROR);
-        return RequiredSignatures::complete($state) ? $state : null;
+        return DocumentSchedule::allows('order', $state) ? $state : null;
     }
 
     public function hookDisplayPaymentTop(): string
@@ -656,15 +695,18 @@ class BlocksignEsign extends Module
                         'shipping_products' => $shipping,
                         'access_groups' => $accessGroups,
                     ]);
+                    $state = DocumentSchedule::subsetForProducts($state, $ids);
                 } else {
-                    $products = self::fileSnapshots($items, $shopId, (int) $order->id_lang);
+                    $products = self::fileSnapshots($items, $shopId, (int) $order->id_lang, $total === 0.0);
                     if (!$products) {
                         continue;
                     }
-                    if (Configuration::get(self::PREORDER, null, null, $shopId)) {
+                    $state = OrderFiles::combine($products);
+                    $default = Configuration::get(self::PREORDER, null, null, $shopId) ? 'before_order' : $timing;
+                    if (DocumentSchedule::has($state + ['timing' => $default], 'before_order')) {
                         throw new RuntimeException('Protected order reached registration without an approved checkout.');
                     }
-                    $state = OrderFiles::combine($products) + [
+                    $state += [
                         'timing' => $timing,
                         'signer_email' => $customer->email,
                         'customer_id' => (int) $customer->id,
@@ -778,7 +820,7 @@ class BlocksignEsign extends Module
     public static function downloadAllowed(Order $order, array $state): bool
     {
         return self::orderEligible($order, $state) && self::paymentReady($order, $state)
-            && Gate::allows('fulfillment', [['timing' => $state['timing'] ?? 'without_payment', 'completed' => RequiredSignatures::complete($state)]]);
+            && DocumentSchedule::allows('fulfillment', $state);
     }
 
     public function hookActionOrderStatusUpdate(array $params): void
@@ -967,16 +1009,17 @@ class BlocksignEsign extends Module
             false
         );
         foreach ($rows as $row) {
-            if (!Configuration::get(self::PREORDER, null, null, (int) $row['id_shop'])) {
+            if (!self::preorderConfigured((int) $row['id_shop'])) {
                 $db->update('blocksign_esign_preorder', ['next_attempt' => time() + 3600], "fingerprint = '" . pSQL($row['fingerprint']) . "'");
                 continue;
             }
             $where = "fingerprint = '" . pSQL($row['fingerprint']) . "' AND used = 0";
             $state = json_decode($row['state'], true, 512, JSON_THROW_ON_ERROR);
             try {
-                $retry = RequiredSignatures::advance(
+                $retry = DocumentSchedule::advance(
                     $workflow,
                     $state,
+                    ['before_order'],
                     static function (array $next) use ($db, $where, &$state): void {
                         if (!$db->update('blocksign_esign_preorder', ['state' => pSQL(json_encode($next, JSON_THROW_ON_ERROR), true)], $where)) {
                             throw new RuntimeException('Could not persist BlockSign checkout progress.');
@@ -1008,7 +1051,7 @@ class BlocksignEsign extends Module
         $retry = false;
         $started = $state['started_at'] ?? (int) $row['created_at'];
         if ($validOrder && !RequiredSignatures::complete($state) && !RequiredSignatures::needsReview($state)) {
-            if (($state['timing'] ?? '') === 'after_payment' && !isset($state['started_at'])) {
+            if (DocumentSchedule::has($state, 'after_payment') && !isset($state['started_at'])) {
                 $started = $state['started_at'] = time();
                 self::updateRow($id, ['state' => pSQL(json_encode($state, JSON_THROW_ON_ERROR), true)]);
             }
@@ -1017,9 +1060,10 @@ class BlocksignEsign extends Module
                 return;
             }
             try {
-                $retry = RequiredSignatures::advance(
+                $retry = DocumentSchedule::advance(
                     $workflow,
                     $state,
+                    ['after_payment', 'without_payment'],
                     static function (array $next) use ($id, &$state): void {
                         self::updateRow($id, ['state' => pSQL(json_encode($next, JSON_THROW_ON_ERROR), true)]);
                         $state = $next;

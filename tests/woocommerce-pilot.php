@@ -101,11 +101,12 @@ class WC_Order
 class WC_Product
 {
     public function is_type(string $type): bool { return $type === 'simple'; }
-    public function __construct(private bool $virtual = true) {}
+    public function __construct(private bool $virtual = true, private int $id = 7) {}
+    public function get_id(): int { return $this->id; }
     public function is_virtual(): bool { return $this->virtual; }
     public static bool $downloadable = false;
     public static array $metadata = [];
-    public function get_meta(string $key): string|int { return self::$metadata[$key] ?? ''; }
+    public function get_meta(string $key): string|int { return $GLOBALS['product_metadata'][$this->id][$key] ?? self::$metadata[$key] ?? ''; }
     public function update_meta_data(string $key, string|int $value): void { self::$metadata[$key] = $value; }
     public function delete_meta_data(string $key): void { unset(self::$metadata[$key]); }
     public function is_downloadable(): bool { return self::$downloadable; }
@@ -118,7 +119,7 @@ class WC_Order_Item
     public function get_product_id(): int { return $this->productId; }
     public function get_variation_id(): int { return 0; }
     public function get_quantity(): int { return 1; }
-    public function get_product(): WC_Product { return new WC_Product($this->virtual); }
+    public function get_product(): WC_Product { return new WC_Product($this->virtual, $this->productId); }
 }
 
 class WC_Order_Item_Product extends WC_Order_Item
@@ -128,6 +129,7 @@ class WC_Order_Item_Product extends WC_Order_Item
     public function set_product(WC_Product $product): void { $this->product = $product; }
     public function set_quantity(int $quantity): void { $this->quantity = $quantity; }
     public function get_product(): WC_Product { return $this->product; }
+    public function get_product_id(): int { return $this->product->get_id(); }
     public function get_quantity(): int { return $this->quantity; }
 }
 
@@ -257,6 +259,7 @@ function get_option(string $name, mixed $default = false): mixed
         'blocksign_esign_category_documents' => $GLOBALS['category_documents'] ?? '',
         'blocksign_esign_scope' => $GLOBALS['configured_scope'] ?? $default,
         'blocksign_esign_paid_timing' => $GLOBALS['configured_timing'],
+        'blocksign_esign_timing_rules' => $GLOBALS['timing_rules'] ?? '',
         default => $default,
     };
 }
@@ -316,7 +319,7 @@ function WC(): object
             return $GLOBALS['session_id'] ?? 'fixture-customer';
         }
     }, 'cart' => new class {
-        public function get_cart(): array { return [['data' => new WC_Product(), 'quantity' => 1]]; }
+        public function get_cart(): array { return $GLOBALS['checkout_products'] ?? [['data' => new WC_Product(), 'quantity' => 1]]; }
         public function get_total(string $context): string { return '10.00'; }
     }];
 }
@@ -765,3 +768,66 @@ $order->refunded = 0;
 $pages[25]->post_status = 'publish';
 check($entitled(81) === null, 'an altered page must not be served by the protected endpoint');
 echo "PASS WooCommerce private customer access and revocation\n";
+
+$configured_timing = 'after_payment';
+$configured_scope = ['mode' => 'all', 'category_id' => 0];
+$timing_rules = "category | 21 | before_order\nproduct | 8 | before_payment\nproduct | 9 | after_payment";
+WC_Product::$metadata = [];
+$product_metadata = [
+    8 => ['_blocksign_esign_agreement_file' => 'custom-agreement.pdf'],
+    9 => ['_blocksign_esign_agreement_file' => 'category-terms.pdf'],
+];
+$checkout_products = array_map(static fn (int $id): array => ['data' => new WC_Product(true, $id), 'quantity' => 1], [7, 8, 9]);
+$makeResponses = static fn (): array => [
+    ['method' => 'POST', 'path' => $documents, 'code' => 202, 'body' => ['document_id' => $documentId]],
+    ['method' => 'POST', 'path' => $requests, 'code' => 201, 'body' => ['request_id' => $requestId]],
+    ['method' => 'POST', 'path' => "$request/send", 'code' => 200, 'body' => ['sent_at' => date(DATE_ATOM)]],
+    ['method' => 'GET', 'path' => $request, 'code' => 200, 'body' => $complete],
+];
+foreach (['classic', 'blocks'] as $checkout) {
+    $queued = $transients = [];
+    $order = new WC_Order();
+    $order->items = [new WC_Order_Item(7), new WC_Order_Item(8), new WC_Order_Item(9)];
+    $order->total = 10;
+    if ($checkout === 'classic') {
+        $errors = new WP_Error();
+        $hooks['woocommerce_after_checkout_validation']($checkoutData, $errors);
+        check($errors->has_errors(), 'mixed classic cart advanced without its before-order document');
+    } else {
+        try {
+            $hooks['woocommerce_store_api_checkout_update_order_from_request']($order, $blockRequest);
+            check(false, 'mixed Store API cart advanced without its before-order document');
+        } catch (RouteError $error) {
+            check($error->getCode() === 400 && $order->state === [], 'unsigned mixed state leaked onto the Store API order');
+        }
+    }
+    $responses = $makeResponses();
+    $hooks['blocksign_esign_preorder_check']($queued['blocksign_esign_preorder_check'][0]);
+    $preview = reset($transients)['state'];
+    check($responses === [] && array_column($preview['documents'], 'completed') === [true, false, false],
+        'the preorder worker touched a later document');
+    if ($checkout === 'classic') {
+        $errors = new WP_Error();
+        $hooks['woocommerce_after_checkout_validation']($checkoutData, $errors);
+        check(!$errors->has_errors(), 'the later documents prevented order placement');
+        $hooks['woocommerce_checkout_create_order']($order);
+    } else {
+        $hooks['woocommerce_store_api_checkout_update_order_from_request']($order, $blockRequest);
+    }
+    check($order->state['timing'] === 'before_payment' && $transients === []
+        && !\BlockSign\WooCommerce\payment_allowed($order, $order->state), 'the mixed order did not defer payment');
+    $responses = $makeResponses();
+    advance($order, $order->state);
+    check($responses === [] && array_column($order->state['documents'], 'completed') === [true, true, false]
+        && \BlockSign\WooCommerce\payment_allowed($order, $order->state), 'an unsigned after-payment document blocked payment or started early');
+
+    $order->paid = true;
+    $order->paidAt = new DateTimeImmutable();
+    check(!download_allowed($order, $order->state), 'mixed order released a download before all documents were complete');
+    \BlockSign\WooCommerce\enqueue_paid_order($order->get_id());
+    check($queued['blocksign_esign_check'] === [42], 'the payment event did not queue the last document');
+    $responses = $makeResponses();
+    advance($order, $order->state);
+    check($responses === [] && download_allowed($order, $order->state), 'the paid worker did not finish the mixed order');
+}
+echo "PASS WooCommerce product and category timing across three checkout stages\n";

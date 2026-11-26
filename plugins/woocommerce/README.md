@@ -57,6 +57,18 @@ Der Worker startet das nächste Dokument, nachdem BlockSign das vorherige bestä
 
 Hat die Bestellung einen positiven Gesamtbetrag, wartet der Shop auf die Zahlungsbestätigung. Bei 0 € bleibt der bestehende Ablauf erhalten. Verwende für bezahlte Produkte eine Zahlungsart, die erst nach Zahlungseingang einen bezahlten Status setzt. Die Standard-Nachnahme wird für diese Downloads nicht unterstützt und sollte für das Produkt im Shop deaktiviert sein.
 
+## Zeitpunkt pro Produkt oder Kategorie
+
+Unter **Signature timing by product or category** lassen sich für geschützte Produkte abweichende Zeitpunkte eintragen. **Signature timing** bleibt der Standard für Produkte ohne passende Regel.
+
+```text
+category | 21 | before_order
+product | 42 | before_payment
+product | 43 | after_payment
+```
+
+Eine Produktregel hat Vorrang. Treffen mehrere Kategorieregeln zu, gilt der früheste der gewählten Zeitpunkte. In gemischten Warenkörben startet das Plugin zuerst die Dokumente vor Bestellabgabe. Weitere Dokumente können die Zahlung auf der Bestellzahlungsseite sperren oder erst nach Zahlungseingang starten. Bei 0 € werden Dokumente der Zahlungsphasen nach der Bestellabgabe angefordert. Identische Dokumente mit identischen Signaturdetails werden einmal zum frühesten erforderlichen Zeitpunkt bestätigt. Für die Auslieferung müssen alle Pflichtdokumente vollständig bestätigt sein.
+
 WooCommerce reagiert auf Zahlungsbestätigung und Statuswechsel. Der Vorgang verlangt einen bezahlten Status und ein Zahlungsdatum. Auch wenn nur ein Teilbetrag erstattet wurde, bleibt der Download gesperrt.
 
 ## Signatur vor Zahlung

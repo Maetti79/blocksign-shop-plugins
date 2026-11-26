@@ -10,7 +10,7 @@ use Shopware\Core\System\CustomField\CustomFieldTypes;
 
 foreach ([
     'Client', 'Gate', 'SignatureSettings', 'SignatureWorkflow', 'RequiredSignatures',
-    'CategoryDocuments', 'ProductFiles', 'ShopConfiguration', 'EvidenceArchive',
+    'CategoryDocuments', 'ProductFiles', 'ShopConfiguration', 'EvidenceArchive', 'DocumentSchedule',
 ] as $file) {
     require_once __DIR__ . '/Core/' . $file . '.php';
 }

@@ -77,6 +77,7 @@ class Configuration
         return match ($key) {
             'BLOCKSIGN_ESIGN_PRODUCT' => 99,
             'BLOCKSIGN_ESIGN_PREORDER' => $GLOBALS['preorder_mode'] ?? 0,
+            'BLOCKSIGN_ESIGN_TIMING_RULES' => $GLOBALS['timing_rules'] ?? '',
             'BLOCKSIGN_ESIGN_CATEGORY_DOCUMENTS' => $GLOBALS['category_documents'] ?? '',
             'BLOCKSIGN_ESIGN_SCOPE' => $GLOBALS['configured_scope'] ?? '',
             'BLOCKSIGN_ESIGN_DOCUMENTS' => 'mandate.pdf | FES | 3 | 25 | 40',
@@ -228,7 +229,7 @@ class Cart
     public function getOrderTotal(bool $tax, int $type): float { return 10.0; }
     public function getProducts(): array
     {
-        return [['id_product' => '99', 'id_product_attribute' => '0', 'cart_quantity' => '1']];
+        return $GLOBALS['cart_items'] ?? [['id_product' => '99', 'id_product_attribute' => '0', 'cart_quantity' => '1']];
     }
     public function OrderExists(): bool { return false; }
 }
@@ -661,3 +662,74 @@ Db::$groups[81] = [3];
 BlocksignEsign::processOrder(42, $workflow);
 check($group_additions === [[20]], 'a retry re-added a manually removed group');
 echo "PASS PrestaShop account access activation and idempotent retry\n";
+
+$timing_rules = "category | 21 | before_order\nproduct | 101 | after_payment";
+$configured_scope = '{"mode":"all","category_id":0}';
+$preorder_mode = 0;
+$category_documents = '';
+Configuration::$productFlags = [2 => [
+    'BLOCKSIGN_ESIGN_PRODUCT_FILES_101' => json_encode(['agreement' => 'custom-agreement.pdf']),
+]];
+Db::$preorder = Db::$row = [];
+$module->context->cart->id = 8;
+$cart_items = [
+    ['id_product' => '99', 'id_product_attribute' => '0', 'cart_quantity' => '1'],
+    ['id_product' => '101', 'id_product_attribute' => '0', 'cart_quantity' => '1'],
+];
+check(str_contains($module->hookDisplayPaymentTop(), 'Request BlockSign'), 'a category rule did not start preorder signing');
+$module->startCheckoutProof();
+$preview = json_decode(Db::$preorder['state'], true);
+check(array_column($preview['documents'], 'timing') === ['before_order', 'before_order', 'after_payment'],
+    'product override or shared-document deduplication selected the wrong timing');
+foreach ($preview['documents'] as &$doc) {
+    $doc['completed'] = $doc['timing'] === 'before_order';
+}
+unset($doc);
+Db::$preorder['state'] = json_encode($preview);
+$options = $available;
+$module->hookActionPresentPaymentOptions(['paymentOptions' => &$options]);
+check(array_keys($options) === ['ps_checkpayment'], 'later documents still blocked the supported payment option');
+$module->hookActionValidateOrderBefore(['cart' => $module->context->cart]);
+
+Order::$paidOrder = true;
+Order::$paid = false;
+$order = new Order(42);
+$order->id_cart = 8;
+$order->items = [
+    ['product_id' => '99', 'product_quantity' => '1', 'product_quantity_refunded' => '0'],
+    ['product_id' => '101', 'product_quantity' => '1', 'product_quantity_refunded' => '0'],
+];
+$module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
+$state = json_decode(Db::$row['state'], true);
+check(array_column($state['documents'], 'completed') === [true, true, false], 'the order did not inherit the mixed signing state');
+
+$calls = 0;
+$followup = new SignatureWorkflow(new Client(static function (string $method, string $path, string $type, string $body) use (&$calls, $documents, $requests): array {
+    $calls++;
+    $request = "/api/v1/signature-requests/" . $requests[0];
+    if ($path === '/api/v1/documents') {
+        check(str_contains($body, '%PDF custom agreement'), 'wrong document started after payment');
+    }
+    return match ([$method, $path]) {
+        ['POST', '/api/v1/documents'] => ['document_id' => $documents[0]],
+        ['POST', '/api/v1/signature-requests'] => ['request_id' => $requests[0]],
+        ['POST', "$request/send"] => ['sent_at' => date(DATE_ATOM)],
+        ['GET', $request] => [
+            'document_id' => $documents[0], 'request_id' => $requests[0], 'completed' => true,
+            'signers' => [['email' => 'guest@example.com', 'signed_at' => date(DATE_ATOM)]],
+        ],
+    };
+}));
+Order::$storedShippingItems = $order->items;
+BlocksignEsign::processOrder(42, $followup);
+check($calls === 0, 'the post-payment document started on an unpaid order');
+Order::$paid = true;
+BlocksignEsign::processOrder(42, $followup);
+check($calls === 4 && BlocksignEsign::downloadAllowed($order, json_decode(Db::$row['state'], true)), 'payment did not start the remaining document');
+Db::$row = [];
+$order->items = [$order->items[1]];
+$module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
+$split = json_decode(Db::$row['state'], true);
+check(array_column($split['documents'], 'file') === ['mandate.pdf', 'custom-agreement.pdf']
+    && array_keys($split['downloads']) === [101], 'a split order inherited documents or downloads for a different shipment');
+echo "PASS PrestaShop product and category timing before order and after payment\n";

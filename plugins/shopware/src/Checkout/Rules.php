@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BlockSign\Shopware\Checkout;
 
+use BlockSign\ESign\DocumentSchedule;
 use BlockSign\ESign\ProductFiles;
 use BlockSign\ESign\RequiredSignatures;
 use BlockSign\ESign\ShopConfiguration;
@@ -163,6 +164,9 @@ final class Rules
         $rule = $scope === 'all' ? ['kind' => 'download'] : [];
         foreach ($rules['categories'] ?? [] as $id => $category) {
             if ($product->getCategories()?->has($id)) {
+                if (isset($rule['timing'], $category['timing']) && DocumentSchedule::earlier($rule['timing'], $category['timing'])) {
+                    unset($category['timing']);
+                }
                 $rule = array_replace($rule, $category);
             }
         }

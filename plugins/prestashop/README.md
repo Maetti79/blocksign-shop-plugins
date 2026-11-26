@@ -63,6 +63,17 @@ Aktiviere **Require confirmation before order and payment** in der Modulkonfigur
 
 Der Modus unterstützt 0‑€‑Bestellungen sowie PrestaShops native Module für Vorkasse per Überweisung (`ps_wirepayment`) und Scheck (`ps_checkpayment`). Zahlungsanweisungen erscheinen dadurch erst nach der Bestätigung und Bestellabgabe. Deaktiviere alle anderen Zahlungswege für die geschützten Produkte. Der serverseitige Hook kennt den aktiven Browser-Warenkorb. Externe Zahlungsanbieter können Zahlungen außerhalb dieses Hooks auslösen. Ein Theme muss im Zahlungsschritt `displayPaymentTop` ausgeben. Aktualisiere das Modul im Modulmanager, damit die Tabelle und die Hooks angelegt werden.
 
+## Zeitpunkt pro Produkt oder Kategorie
+
+Unter **Signature timing by product or category** lassen sich für geschützte Produkte abweichende Zeitpunkte eintragen. **Require confirmation before order and payment** bleibt der Standard für Produkte ohne passende Regel.
+
+```text
+category | 21 | before_order
+product | 42 | after_payment
+```
+
+Eine Produktregel hat Vorrang. Treffen mehrere Kategorieregeln zu, gilt der früheste der gewählten Zeitpunkte. In einem gemischten Warenkorb kann der Kunde nach den vorab nötigen Dokumenten bestellen. Der Worker startet die übrigen Dokumente nach Zahlungseingang oder direkt nach einer 0‑€‑Bestellung. Identische Dokumente mit identischen Signaturdetails werden einmal zum frühesten erforderlichen Zeitpunkt bestätigt. Die verfügbaren Zahlungsarten für Warenkörbe mit Vorab-Bestätigung stehen oben.
+
 ## Versandfreigabe für physische Produkte
 
 Aktualisiere das Modul im Modulmanager. Aktiviere anschließend **Require BlockSign before shipping** unter **Optionen** für ein physisches Produkt ohne Varianten. Das Modul verwendet die für dieses Produkt hinterlegten Pflichtdokumente. Eine Download-Datei ist für diese Position nicht erforderlich.

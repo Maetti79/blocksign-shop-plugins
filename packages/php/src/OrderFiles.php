@@ -12,6 +12,7 @@ final class OrderFiles
         $documents = [];
         $shipping = [];
         $accessGroups = [];
+        $scheduled = false;
         foreach ($products as $id => $files) {
             if (isset($files['download_file'], $files['download_hash'])) {
                 $downloads[$id] = [
@@ -27,11 +28,25 @@ final class OrderFiles
             }
             foreach ($files['documents'] as $document) {
                 $key = json_encode([$document['file'], $document['agreement_hash'], $document['placement']], JSON_THROW_ON_ERROR);
-                $documents[$key] ??= $document;
+
+                if (!isset($files['timing'])) {
+                    $documents[$key] ??= $document;
+                    continue;
+                }
+                $scheduled = true;
+                if (!isset($documents[$key])) {
+                    $documents[$key] = $document + ['timing' => $files['timing'], 'products' => []];
+                } elseif (DocumentSchedule::earlier($files['timing'], $documents[$key]['timing'])) {
+                    $documents[$key]['timing'] = $files['timing'];
+                }
+                $documents[$key]['products'][] = (int) $id;
             }
         }
 
         $state = ['downloads' => $downloads, 'documents' => array_values($documents)];
+        if ($scheduled) {
+            $state['scheduled_documents'] = true;
+        }
         if ($shipping) {
             $state['shipping_products'] = $shipping;
         }
