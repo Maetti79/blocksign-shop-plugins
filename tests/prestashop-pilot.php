@@ -39,9 +39,9 @@ class Module
         $this->context = (object) ['shop' => (object) ['id' => 2]];
     }
 
-    public function registerHook(array $hooks): bool
+    public function registerHook(array|string $hooks): bool
     {
-        $this->hooks = $hooks;
+        $this->hooks = (array) $hooks;
         return true;
     }
 }
@@ -54,6 +54,14 @@ class Shop
 class Configuration
 {
     public static array $productFlags = [];
+    public static int $shippingStatus = 0;
+
+    public static function getGlobalValue(string $key): int { return self::$shippingStatus; }
+    public static function updateGlobalValue(string $key, int $value): bool
+    {
+        self::$shippingStatus = $value;
+        return true;
+    }
 
     public static function updateValue(string $key, int|string $value, bool $html, ?int $group, int $shop): bool
     {
@@ -63,7 +71,7 @@ class Configuration
 
     public static function get(string $key, ...$context): int|string
     {
-        if (str_starts_with($key, 'BLOCKSIGN_ESIGN_PRODUCT_FLAG_') || str_starts_with($key, 'BLOCKSIGN_ESIGN_PRODUCT_FILES_')) {
+        if (str_starts_with($key, 'BLOCKSIGN_ESIGN_SHIPPING_FLAG_') || str_starts_with($key, 'BLOCKSIGN_ESIGN_PRODUCT_FLAG_') || str_starts_with($key, 'BLOCKSIGN_ESIGN_PRODUCT_FILES_')) {
             return self::$productFlags[$context[2]][$key] ?? 0;
         }
         return match ($key) {
@@ -88,11 +96,15 @@ class Order
     public int $id_cart = 7;
     public static bool $paid = false;
     public static bool $paidOrder = false;
+    public static int $storedShippingState = 0;
+    public static array $storedShippingItems = [];
+    public static string $storedCreatedAt = '';
+    public string $date_add;
     public int $current_state = 2;
 
     public function getCurrentOrderState(): object
     {
-        return (object) ['paid' => self::$paid];
+        return (object) ['paid' => self::$paid, 'shipped' => false, 'delivery' => false];
     }
 
     public string $module = 'free_order';
@@ -104,6 +116,11 @@ class Order
             $this->module = 'ps_checkpayment';
             $this->total_paid_tax_incl = '10.000000';
         }
+        if (self::$storedShippingState) {
+            $this->current_state = self::$storedShippingState;
+        }
+        $this->items = self::$storedShippingItems;
+        $this->date_add = self::$storedCreatedAt ?: date('Y-m-d H:i:s');
     }
 
     public array $items = [];
@@ -113,6 +130,52 @@ class Order
         return $this->items ?: [['product_id' => '99', 'product_quantity' => '1', 'product_quantity_refunded' => '0']];
     }
 }
+
+#[AllowDynamicProperties]
+class OrderState
+{
+    public bool $deleted = false;
+    public array $name = [];
+
+    public function __construct(public int $id = 0) {}
+
+    public function add(): bool
+    {
+        $this->id = 19;
+        check($this->paid && $this->logable && count($this->name) === 2, 'invalid dispatch status settings');
+        return true;
+    }
+}
+
+class Language
+{
+    public static function getLanguages(bool $active): array
+    {
+        return [['id_lang' => 1, 'iso_code' => 'de'], ['id_lang' => 2, 'iso_code' => 'en']];
+    }
+}
+
+class OrderHistory
+{
+    public int $id_order;
+
+    public function changeIdOrderState(int $id, Order $order, bool $existingPayment): void
+    {
+        $GLOBALS['module']->hookActionOrderStatusUpdate(['newOrderStatus' => (object) [
+            'id' => $id, 'shipped' => false, 'delivery' => false,
+        ], 'id_order' => $order->id]);
+        Order::$storedShippingState = $id;
+    }
+
+    public function add(): bool
+    {
+        $GLOBALS['shipping_history_writes'] = ($GLOBALS['shipping_history_writes'] ?? 0) + 1;
+        return true;
+    }
+}
+
+class TestModuleError extends RuntimeException {}
+class_alias(TestModuleError::class, 'PrestaShop\PrestaShop\Core\Module\Exception\ModuleErrorException');
 
 class Product
 {
@@ -471,3 +534,51 @@ try {
     check($error->getMessage() === '/order', 'proof replay did not return shopper to checkout');
 }
 echo "PASS PrestaShop confirmation before order and offline payment\n";
+
+require ($argv[1] ?? 'build/blocksignesign') . '/upgrade/upgrade-0.11.0.php';
+check(upgrade_module_0_11_0($module) && $module->hooks === ['actionOrderStatusUpdate'], 'shipping upgrade did not create status and hook');
+$preorder_mode = 0;
+$configured_scope = '{"mode":"product","category_id":0}';
+Order::$storedShippingItems = [['product_id' => '100', 'product_quantity' => '1', 'product_quantity_refunded' => '0']];
+Order::$paid = true;
+$order = new Order(42);
+$order->id_cart = 8;
+$module->hookActionAfterUpdateProductFormHandler([
+    'id' => 100, 'form_data' => ['options' => ['blocksign_esign_required' => false, 'blocksign_esign_shipping' => true]],
+]);
+$ship = ['newOrderStatus' => (object) ['id' => 4, 'shipped' => true, 'delivery' => false], 'id_order' => 42];
+Db::$row = [];
+Order::$storedCreatedAt = date('Y-m-d H:i:s', time() - 3600);
+$module->hookActionOrderStatusUpdate($ship);
+Order::$storedCreatedAt = '';
+try {
+    $module->hookActionOrderStatusUpdate($ship);
+    check(false, 'marked physical order with missing state was allowed to ship');
+} catch (TestModuleError $error) {
+    check(str_contains($error->getMessage(), 'missing'), 'unexpected missing state error');
+}
+
+$module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
+$shippingState = json_decode(Db::$row['state'], true);
+check($shippingState['shipping_products'] === [100] && $shippingState['downloads'] === [], 'shipping order must not require a download');
+try {
+    $module->hookActionOrderStatusUpdate($ship);
+    check(false, 'unconfirmed physical order was allowed to ship');
+} catch (TestModuleError $error) {
+    check(str_contains($error->getMessage(), 'required'), 'unexpected shipping hold error');
+}
+foreach ($shippingState['documents'] as &$document) {
+    $document['completed'] = true;
+}
+unset($document);
+Db::$row['state'] = json_encode($shippingState);
+Order::$paid = false;
+BlocksignEsign::processOrder(42, $workflow);
+check(Order::$storedShippingState === 0, 'unpaid order became ready to ship');
+Order::$paid = true;
+BlocksignEsign::processOrder(42, $workflow);
+check(Order::$storedShippingState === 19 && $shipping_history_writes === 1, 'paid confirmed order was not released');
+BlocksignEsign::processOrder(42, $workflow);
+check($shipping_history_writes === 1, 'repeat processing wrote duplicate shipping history');
+$module->hookActionOrderStatusUpdate($ship);
+echo "PASS PrestaShop physical order hold and shipping release\n";

@@ -61,6 +61,14 @@ Aktiviere **Require confirmation before order and payment** in der Modulkonfigur
 
 Der Modus unterstützt 0‑€‑Bestellungen sowie PrestaShops native Module für Vorkasse per Überweisung (`ps_wirepayment`) und Scheck (`ps_checkpayment`). Zahlungsanweisungen erscheinen dadurch erst nach der Bestätigung und Bestellabgabe. Deaktiviere alle anderen Zahlungswege für die geschützten Produkte. Der serverseitige Hook kennt den aktiven Browser-Warenkorb. Externe Zahlungsanbieter können Zahlungen außerhalb dieses Hooks auslösen. Ein Theme muss im Zahlungsschritt `displayPaymentTop` ausgeben. Aktualisiere das Modul im Modulmanager, damit die Tabelle und die Hooks angelegt werden.
 
+## Versandfreigabe für physische Produkte
+
+Aktualisiere das Modul im Modulmanager. Aktiviere anschließend **Require BlockSign before shipping** unter **Optionen** für ein physisches Produkt ohne Varianten. Das Modul verwendet die für dieses Produkt hinterlegten Pflichtdokumente. Eine Download-Datei ist für diese Position nicht erforderlich.
+
+Nach Zahlungsbestätigung verarbeitet der Worker die Pflichtdokumente und setzt die Bestellung nach Abschluss auf **BlockSign: Versandbereit**. PrestaShop blockiert vorher reguläre Statuswechsel auf Versand oder Lieferung. Hat der Kunde die Pflichtdokumente bereits im Checkout bestätigt, wartet die Versandfreigabe nur noch auf die Zahlung.
+
+Versand- und ERP-Integrationen müssen bei geschützten Bestellungen den Status **BlockSign: Versandbereit** abwarten. Ein Export direkt beim Zahlungseingang braucht eine eigene Sperre. Prüfe die Kombination aus Zahlungsmodul, PrestaShop und Versandsoftware im Testshop.
+
 ## Elektronischer Zustellnachweis
 
 Wähle **Proof of delivery** für das erste Pflichtdokument. Für ein zusätzliches PDF verwende die Kurzform `mitteilung.pdf | POD`. Bei einer Kategorie stellst du ihre ID voran, zum Beispiel `21 | mitteilung.pdf | POD`. BlockSign versendet das Dokument zur Empfangsbestätigung. Für diesen Vorgang sind keine Signaturposition oder Signaturstufe erforderlich.

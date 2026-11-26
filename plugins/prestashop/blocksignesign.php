@@ -10,6 +10,7 @@ use BlockSign\ESign\CategoryDocuments;
 use BlockSign\ESign\RequiredSignatures;
 use BlockSign\ESign\SignatureSettings;
 use BlockSign\ESign\SignatureWorkflow;
+use PrestaShop\PrestaShop\Core\Module\Exception\ModuleErrorException;
 use Symfony\Component\Form\Extension\Core\Type\CheckboxType;
 use Symfony\Component\Form\Extension\Core\Type\TextType;
 use Symfony\Component\Validator\Constraints\Regex;
@@ -36,6 +37,9 @@ class BlocksignEsign extends Module
     private static array $approvedCarts = [];
     private const PRODUCT = 'BLOCKSIGN_ESIGN_PRODUCT';
     private const SCOPE = 'BLOCKSIGN_ESIGN_SCOPE';
+    private const SHIPPING_FLAG = 'blocksign_esign_shipping';
+    private const SHIPPING_FLAG_PREFIX = 'BLOCKSIGN_ESIGN_SHIPPING_FLAG_';
+    private const SHIPPING_STATUS = 'BLOCKSIGN_ESIGN_SHIPPING_STATUS';
     private const PRODUCT_FLAG = 'blocksign_esign_required';
     private const PRODUCT_FLAG_PREFIX = 'BLOCKSIGN_ESIGN_PRODUCT_FLAG_';
     private const PRODUCT_FILES_PREFIX = 'BLOCKSIGN_ESIGN_PRODUCT_FILES_';
@@ -46,13 +50,13 @@ class BlocksignEsign extends Module
     public function __construct()
     {
         $this->name = 'blocksignesign';
-        $this->version = '0.10.0';
+        $this->version = '0.11.0';
         $this->author = 'BlockSign';
         $this->tab = 'administration';
         $this->ps_versions_compliancy = ['min' => '9.0.0', 'max' => _PS_VERSION_];
         parent::__construct();
         $this->displayName = 'BlockSign eSign';
-        $this->description = 'Release a private PDF after BlockSign confirms its signature.';
+        $this->description = 'Release protected PDFs and shipments after BlockSign confirmation.';
     }
 
     public function install()
@@ -71,7 +75,29 @@ class BlocksignEsign extends Module
             )
             && $this->registerHook(['actionValidateOrderAfter', 'displayOrderConfirmation', 'displayOrderDetail'])
             && $this->registerProductHooks()
-            && $this->installPreorder();
+            && $this->installPreorder()
+            && $this->installShipping();
+    }
+
+    public function installShipping(): bool
+    {
+        $status = new OrderState((int) Configuration::getGlobalValue(self::SHIPPING_STATUS));
+        if (!Validate::isLoadedObject($status) || $status->deleted) {
+            $status = new OrderState();
+            foreach (Language::getLanguages(false) as $language) {
+                $status->name[(int) $language['id_lang']] = $language['iso_code'] === 'de'
+                    ? 'BlockSign: Versandbereit'
+                    : 'BlockSign: ready to ship';
+            }
+            $status->color = '#2A7555';
+            $status->module_name = $this->name;
+            $status->paid = true;
+            $status->logable = true;
+            if (!$status->add() || !Configuration::updateGlobalValue(self::SHIPPING_STATUS, (int) $status->id)) {
+                return false;
+            }
+        }
+        return $this->registerHook('actionOrderStatusUpdate');
     }
 
     public function installPreorder(): bool
@@ -111,6 +137,12 @@ class BlocksignEsign extends Module
             'required' => false,
             'data' => self::productMarked($productId, $shopId),
         ]);
+        $builder->get('options')->add(self::SHIPPING_FLAG, CheckboxType::class, [
+            'label' => 'Require BlockSign before shipping',
+            'help' => 'Applies to physical products. Fulfillment waits for the BlockSign ready-to-ship status.',
+            'required' => false,
+            'data' => self::shippingMarked($productId, $shopId),
+        ]);
         $files = self::productFiles($productId, $shopId);
         foreach (ProductFiles::DEFAULTS as $kind => $default) {
             $builder->get('options')->add('blocksign_esign_' . $kind . '_file', TextType::class, [
@@ -135,6 +167,13 @@ class BlocksignEsign extends Module
 
         if (!Configuration::updateValue(self::PRODUCT_FLAG_PREFIX . $productId, (int) $flag, false, null, $shopId)) {
             throw new RuntimeException('Could not save the BlockSign product checkbox.');
+        }
+        $shippingFlag = $params['form_data']['options'][self::SHIPPING_FLAG] ?? null;
+        if (is_bool($shippingFlag)) {
+            $enabledAt = $shippingFlag ? (self::shippingEnabledAt($productId, $shopId) ?: time()) : 0;
+            if (!Configuration::updateValue(self::SHIPPING_FLAG_PREFIX . $productId, $enabledAt, false, null, $shopId)) {
+                throw new RuntimeException('Could not save the BlockSign shipping checkbox.');
+            }
         }
         $files = self::productFiles($productId, $shopId);
         foreach (array_keys(ProductFiles::DEFAULTS) as $kind) {
@@ -165,6 +204,16 @@ class BlocksignEsign extends Module
     private static function productMarked(int $productId, int $shopId): bool
     {
         return (bool) Configuration::get(self::PRODUCT_FLAG_PREFIX . $productId, null, null, $shopId);
+    }
+
+    private static function shippingMarked(int $productId, int $shopId): bool
+    {
+        return self::shippingEnabledAt($productId, $shopId) > 0;
+    }
+
+    private static function shippingEnabledAt(int $productId, int $shopId): int
+    {
+        return (int) Configuration::get(self::SHIPPING_FLAG_PREFIX . $productId, null, null, $shopId);
     }
 
     public function getContent()
@@ -313,15 +362,16 @@ class BlocksignEsign extends Module
         $categoryDocuments = CategoryDocuments::parse((string) Configuration::get(self::CATEGORY_DOCUMENTS, null, null, $shopId));
         foreach ($items as $item) {
             $productId = (int) $item['product_id'];
-            if (isset($products[$productId]) || ($scope['mode'] === 'product' && $productId !== $configuredProduct)) {
+            if (isset($products[$productId]) || (int) ($item['product_attribute_id'] ?? 0) !== 0) {
                 continue;
             }
             $product = new Product($productId, false, null, $shopId);
             $categories = $scope['mode'] === 'category' || $categoryDocuments ? $product->getCategories() : [];
             $flagged = $scope['mode'] === 'flagged' && self::productMarked($productId, $shopId);
-            if (!$product->is_virtual || (int) ($item['product_attribute_id'] ?? 0) !== 0
+            $shipping = !$product->is_virtual && self::shippingMarked($productId, $shopId);
+            if (!$shipping && (!$product->is_virtual
                 || !ProductScope::matches($scope, $configuredProduct, $productId, $categories, $flagged)
-                || ProductDownload::getIdFromIdProduct($productId) || $product->getAttachments($languageId)) {
+                || ProductDownload::getIdFromIdProduct($productId) || $product->getAttachments($languageId))) {
                 continue;
             }
             $products[$productId] = ProductFiles::snapshot(
@@ -332,8 +382,9 @@ class BlocksignEsign extends Module
                     $categoryDocuments,
                     $categories
                 ),
-                self::asset(...)
-            );
+                self::asset(...),
+                !$shipping
+            ) + ['shipping' => $shipping];
         }
         return $products;
     }
@@ -482,11 +533,9 @@ class BlocksignEsign extends Module
     {
         foreach ($params['orders'] ?? [] as $order) {
             $shopId = (int) $order->id_shop;
-            $scope = self::productScope($shopId);
-            $configuredProduct = (int) Configuration::get(self::PRODUCT, null, null, $shopId);
             $total = (float) $order->total_paid_tax_incl;
             $timing = $total > 0.0 ? 'after_payment' : 'without_payment';
-            if (($scope['mode'] === 'product' && !$configuredProduct) || !self::matchesTiming($order, $timing)) {
+            if (!self::matchesTiming($order, $timing)) {
                 continue;
             }
             $customer = $params['customer'];
@@ -497,12 +546,14 @@ class BlocksignEsign extends Module
             try {
                 $items = $order->getProductsDetail();
                 $approved = self::$approvedCarts[(int) ($order->id_cart ?? 0)] ?? [];
-                $downloads = array_intersect_key($approved['downloads'] ?? [], array_flip(array_column($items, 'product_id')));
                 if ($approved) {
-                    if (!$downloads) {
+                    $ids = array_map('intval', array_column($items, 'product_id'));
+                    $downloads = array_intersect_key($approved['downloads'] ?? [], array_flip($ids));
+                    $shipping = array_values(array_intersect($approved['shipping_products'] ?? [], $ids));
+                    if (!$downloads && !$shipping) {
                         continue;
                     }
-                    $state = array_replace($approved, ['downloads' => $downloads]);
+                    $state = array_replace($approved, ['downloads' => $downloads, 'shipping_products' => $shipping]);
                 } else {
                     $products = self::fileSnapshots($items, $shopId, (int) $order->id_lang);
                     if (!$products) {
@@ -581,7 +632,7 @@ class BlocksignEsign extends Module
                 return false;
             }
         }
-        $protected = OrderFiles::downloads($state);
+        $protected = OrderFiles::downloads($state) + array_fill_keys($state['shipping_products'] ?? [], true);
         if (!$protected) {
             return false;
         }
@@ -624,6 +675,55 @@ class BlocksignEsign extends Module
     {
         return self::orderEligible($order, $state) && self::paymentReady($order, $state)
             && Gate::allows('fulfillment', [['timing' => $state['timing'] ?? 'without_payment', 'completed' => RequiredSignatures::complete($state)]]);
+    }
+
+    public function hookActionOrderStatusUpdate(array $params): void
+    {
+        $target = $params['newOrderStatus'];
+        $readyStatus = (int) Configuration::getGlobalValue(self::SHIPPING_STATUS);
+        $readyTarget = $readyStatus > 0 && (int) $target->id === $readyStatus;
+        if (!$readyTarget && !$target->shipped && !$target->delivery) {
+            return;
+        }
+
+        $order = new Order((int) $params['id_order']);
+        $row = self::findOrder((int) $order->id);
+        $state = $row && (int) $row['id_shop'] === (int) $order->id_shop
+            ? json_decode($row['state'], true, 512, JSON_THROW_ON_ERROR) : [];
+        if (!empty($state['shipping_products']) && self::downloadAllowed($order, $state)) {
+            return;
+        }
+        if ($readyTarget || !empty($state['shipping_products'])) {
+            throw new ModuleErrorException('BlockSign confirmation and payment are required before shipping this order.');
+        }
+        if (!$state) {
+            $createdAt = strtotime((string) $order->date_add);
+            foreach ($order->getProductsDetail() as $item) {
+                $id = (int) $item['product_id'];
+                $enabledAt = self::shippingEnabledAt($id, (int) $order->id_shop);
+                if ((int) ($item['product_attribute_id'] ?? 0) === 0 && $enabledAt > 0
+                    && (!$createdAt || $createdAt >= $enabledAt)
+                    && !(new Product($id, false, null, (int) $order->id_shop))->is_virtual) {
+                    throw new ModuleErrorException('This order is missing the BlockSign confirmation required for shipping.');
+                }
+            }
+        }
+    }
+
+    private static function releaseShipping(Order $order, array $state): void
+    {
+        $readyStatus = (int) Configuration::getGlobalValue(self::SHIPPING_STATUS);
+        $current = $order->getCurrentOrderState();
+        if (!$readyStatus || (int) $order->current_state === $readyStatus
+            || ($current && ($current->shipped || $current->delivery)) || !self::downloadAllowed($order, $state)) {
+            return;
+        }
+        $history = new OrderHistory();
+        $history->id_order = (int) $order->id;
+        $history->changeIdOrderState($readyStatus, $order, true);
+        if (!$history->add()) {
+            throw new RuntimeException('Could not save the shipping status history.');
+        }
     }
 
     public static function asset(string $name): string
@@ -793,12 +893,20 @@ class BlocksignEsign extends Module
                 }
             }
         }
+        if ($validOrder && !empty($state['shipping_products']) && RequiredSignatures::complete($state)) {
+            try {
+                self::releaseShipping(new Order($id), $state);
+            } catch (Throwable $error) {
+                PrestaShopLogger::addLog('BlockSign could not release the order for shipping.', 2, null, 'Order', $id);
+                $retry = time() - $started < 604800;
+            }
+        }
         if ($validOrder && $archive && RequiredSignatures::complete($state) && time() - $started < 604800) {
             try {
                 $root = ($_SERVER['DOCUMENT_ROOT'] ?? '') ?: _PS_ROOT_DIR_;
                 $retry = $archive->storeNext(
                     (string) getenv('BLOCKSIGN_ESIGN_ARCHIVE'), $root, 'prestashop-' . (int) $order->id_shop . '-' . $id, $state
-                );
+                ) || $retry;
             } catch (Throwable $error) {
                 PrestaShopLogger::addLog('BlockSign evidence could not be archived.', 2, null, 'Order', $id);
                 $retry = true;

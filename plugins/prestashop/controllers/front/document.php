@@ -68,7 +68,7 @@ class BlocksignEsignDocumentModuleFrontController extends ModuleFrontController
                 ], true);
                 $links[] = '<a href="' . BlocksignEsign::escape($url) . '">Download ' . BlocksignEsign::escape($file['file']) . '</a>';
             }
-            $message = implode('<br>', $links);
+            $message = $links ? implode('<br>', $links) : 'All required confirmations are complete.';
         }
 
         if (!BlocksignEsign::paymentReady($order, $state)) {
