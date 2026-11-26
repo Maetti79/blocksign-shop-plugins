@@ -2,6 +2,7 @@
 
 use BlockSign\ESign\Client;
 use BlockSign\ESign\Gate;
+use BlockSign\ESign\SignatureSettings;
 use BlockSign\ESign\SignatureWorkflow;
 
 if (!defined('_PS_VERSION_')) {
@@ -10,11 +11,13 @@ if (!defined('_PS_VERSION_')) {
 
 require_once __DIR__ . '/core/Client.php';
 require_once __DIR__ . '/core/Gate.php';
+require_once __DIR__ . '/core/SignatureSettings.php';
 require_once __DIR__ . '/core/SignatureWorkflow.php';
 
 class BlocksignEsign extends Module
 {
     private const PRODUCT = 'BLOCKSIGN_ESIGN_PRODUCT';
+    private const SIGNATURE = 'BLOCKSIGN_ESIGN_SIGNATURE';
 
     public function __construct()
     {
@@ -50,10 +53,23 @@ class BlocksignEsign extends Module
         $output = '';
         if (Tools::isSubmit('submitBlocksignEsign')) {
             $productId = filter_var(Tools::getValue(self::PRODUCT), FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
-            if ($productId === false || !Configuration::updateValue(self::PRODUCT, $productId)) {
-                $output = $this->displayError('Enter a valid product ID.');
-            } else {
+            try {
+                $placement = SignatureSettings::validate([
+                    'signature_level' => Tools::getValue('blocksign_level'),
+                    'page' => Tools::getValue('blocksign_page'),
+                    'x' => Tools::getValue('blocksign_x'),
+                    'y' => Tools::getValue('blocksign_y'),
+                ]);
+                if ($productId === false) {
+                    throw new InvalidArgumentException('Enter a valid product ID.');
+                }
+                if (!Configuration::updateValue(self::SIGNATURE, json_encode($placement, JSON_THROW_ON_ERROR))
+                    || !Configuration::updateValue(self::PRODUCT, $productId)) {
+                    throw new RuntimeException('Could not save the BlockSign settings.');
+                }
                 $output = $this->displayConfirmation('Settings saved.');
+            } catch (RuntimeException | InvalidArgumentException $error) {
+                $output = $this->displayError($error->getMessage());
             }
         }
 
@@ -62,7 +78,14 @@ class BlocksignEsign extends Module
         $form->currentIndex = AdminController::$currentIndex . '&configure=' . $this->name;
         $form->token = Tools::getAdminTokenLite('AdminModules');
         $form->submit_action = 'submitBlocksignEsign';
-        $form->fields_value = [self::PRODUCT => (int) Configuration::get(self::PRODUCT)];
+        $settings = self::signatureSettings();
+        $form->fields_value = [
+            self::PRODUCT => (int) Configuration::get(self::PRODUCT),
+            'blocksign_level' => $settings['signature_level'],
+            'blocksign_page' => $settings['page'],
+            'blocksign_x' => $settings['x'],
+            'blocksign_y' => $settings['y'],
+        ];
         return $output . $form->generateForm([['form' => [
             'legend' => ['title' => 'BlockSign eSign'],
             'input' => [[
@@ -70,9 +93,30 @@ class BlocksignEsign extends Module
                 'name' => self::PRODUCT,
                 'label' => 'Protected product ID',
                 'desc' => 'Use a free virtual product with no native download or attachment. Enter 0 to disable new requests.',
+            ], [
+                'type' => 'select',
+                'name' => 'blocksign_level',
+                'label' => 'Signature level',
+                'options' => ['query' => [
+                    ['id' => 'aes', 'name' => 'EES'],
+                    ['id' => 'fes', 'name' => 'FES'],
+                    ['id' => 'qes', 'name' => 'QES'],
+                ], 'id' => 'id', 'name' => 'name'],
+            ], [
+                'type' => 'text', 'name' => 'blocksign_page', 'label' => 'PDF page (starting at 1)',
+            ], [
+                'type' => 'text', 'name' => 'blocksign_x', 'label' => 'X from left',
+            ], [
+                'type' => 'text', 'name' => 'blocksign_y', 'label' => 'Y from top',
             ]],
             'submit' => ['title' => 'Save'],
         ]]]);
+    }
+
+    private static function signatureSettings(?int $shopId = null): array
+    {
+        $stored = Configuration::get(self::SIGNATURE, null, null, $shopId);
+        return $stored ? SignatureSettings::validate(json_decode($stored, true, 512, JSON_THROW_ON_ERROR)) : SignatureSettings::DEFAULTS;
     }
 
     public function hookActionValidateOrderAfter(array $params): void
@@ -107,6 +151,7 @@ class BlocksignEsign extends Module
                     'signer_email' => $customer->email,
                     'phase' => 'upload',
                     'completed' => false,
+                    'placement' => self::signatureSettings((int) $order->id_shop),
                 ];
                 $saved = Db::getInstance()->insert('blocksign_esign', [
                     'id_order' => (int) $order->id,

@@ -14,7 +14,9 @@ namespace BlockSign\WooCommerce;
 
 use BlockSign\ESign\Client;
 use BlockSign\ESign\Gate;
+use BlockSign\ESign\SignatureSettings;
 use BlockSign\ESign\SignatureWorkflow;
+use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
 use WC_Order;
@@ -26,6 +28,7 @@ if (!defined('ABSPATH')) {
 
 require_once __DIR__ . '/core/Gate.php';
 require_once __DIR__ . '/core/Client.php';
+require_once __DIR__ . '/core/SignatureSettings.php';
 require_once __DIR__ . '/core/SignatureWorkflow.php';
 
 const META = '_blocksign_esign';
@@ -37,7 +40,23 @@ function configured_product(): int
     return absint(get_option('blocksign_esign_product', 0));
 }
 
+function signature_settings(): array
+{
+    return SignatureSettings::validate(get_option('blocksign_esign_signature', SignatureSettings::DEFAULTS));
+}
+
 add_action('admin_init', static function (): void {
+    register_setting('blocksign_esign', 'blocksign_esign_signature', [
+        'type' => 'array',
+        'sanitize_callback' => static function ($value): array {
+            try {
+                return SignatureSettings::validate((array) $value);
+            } catch (InvalidArgumentException $error) {
+                add_settings_error('blocksign_esign_signature', 'invalid_placement', $error->getMessage());
+                return signature_settings();
+            }
+        },
+    ]);
     register_setting('blocksign_esign', 'blocksign_esign_product', [
         'type' => 'integer',
         'sanitize_callback' => 'absint',
@@ -49,6 +68,16 @@ add_action('admin_menu', static function (): void {
         echo '<div class="wrap"><h1>BlockSign eSign</h1><form action="options.php" method="post">';
         settings_fields('blocksign_esign');
         printf('<label for="blocksign_esign_product">Protected product ID</label> <input id="blocksign_esign_product" type="number" min="0" name="blocksign_esign_product" value="%d">', configured_product());
+        $settings = signature_settings();
+        echo '<p><label for="blocksign-signature-level">Signature level</label> <select id="blocksign-signature-level" name="blocksign_esign_signature[signature_level]">';
+        foreach (['aes' => 'EES', 'fes' => 'FES', 'qes' => 'QES'] as $value => $label) {
+            printf('<option value="%s"%s>%s</option>', esc_attr($value), selected($settings['signature_level'], $value, false), esc_html($label));
+        }
+        echo '</select></p>';
+        foreach (['page' => 'PDF page', 'x' => 'X from left', 'y' => 'Y from top'] as $key => $label) {
+            printf('<p><label for="blocksign-%1$s">%2$s</label> <input id="blocksign-%1$s" name="blocksign_esign_signature[%1$s]" type="number" min="%3$d" step="%4$s" value="%5$s" required></p>',
+                esc_attr($key), esc_html($label), $key === 'page' ? 1 : 0, $key === 'page' ? '1' : 'any', esc_attr((string) $settings[$key]));
+        }
         submit_button();
         echo '</form></div>';
     });
@@ -110,6 +139,7 @@ function snapshot(WC_Order $order): void
             'signer_email' => $order->get_billing_email(),
             'phase' => 'upload',
             'completed' => false,
+            'placement' => signature_settings(),
         ]);
         return;
     }

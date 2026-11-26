@@ -63,6 +63,11 @@ function wp_remote_request(string $url, array $options): array
     check($call !== null && $url === 'https://blocksign.io' . $call['path'], 'unexpected API URL');
     check($options['method'] === $call['method'], 'unexpected method');
     check($options['headers']['Authorization'] === 'Bearer fixture-only', 'missing authentication');
+    if ($call['path'] === '/api/v1/signature-requests') {
+        $payload = json_decode($options['body'], true, 512, JSON_THROW_ON_ERROR);
+        check($payload['signature_level'] === 'aes' && $payload['page'] === 1
+            && $payload['x'] === 50 && $payload['y'] === 50, 'legacy order must keep the default placement');
+    }
     return $call;
 }
 

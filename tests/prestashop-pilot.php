@@ -30,10 +30,11 @@ class Module
 
 class Configuration
 {
-    public static function get(string $key, ...$context): int
+    public static function get(string $key, ...$context): int|string
     {
         return match ($key) {
             'BLOCKSIGN_ESIGN_PRODUCT' => 99,
+            'BLOCKSIGN_ESIGN_SIGNATURE' => '{"signature_level":"qes","page":2,"x":12.5,"y":0}',
             'PS_OS_CANCELED' => 6,
             'PS_OS_REFUND' => 7,
             'PS_OS_ERROR' => 8,
@@ -140,6 +141,11 @@ check(!BlocksignEsign::downloadAllowed($order, json_decode($row['state'], true))
 $document = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 $request = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 $workflow = new SignatureWorkflow(new Client(static function (string $method, string $path, string $type, string $body) use ($document, $request): array {
+    if ($path === '/api/v1/signature-requests') {
+        $payload = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+        check($payload['signature_level'] === 'qes' && $payload['page'] === 2
+            && $payload['x'] === 12.5 && $payload['y'] === 0, 'configured placement not sent to BlockSign');
+    }
     return match ([$method, $path]) {
         ['POST', '/api/v1/documents'] => ['document_id' => $document],
         ['POST', '/api/v1/signature-requests'] => ['request_id' => $request],

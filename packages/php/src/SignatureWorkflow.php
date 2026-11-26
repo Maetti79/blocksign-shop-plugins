@@ -31,13 +31,14 @@ final class SignatureWorkflow
         }
 
         if ($state['phase'] === 'prepare') {
+            $placement = SignatureSettings::validate($state['placement'] ?? SignatureSettings::DEFAULTS);
             $state['phase'] = 'prepare_pending_review';
             $persist($state);
             try {
                 $state['request_id'] = $client->prepare(
                     $state['document_id'],
                     ['signer_email' => $state['signer_email']],
-                    ['signature_level' => 'aes', 'page' => 1, 'x' => 50, 'y' => 50]
+                    $placement
                 );
             } catch (RuntimeException $error) {
                 // The documented 409 means the document is not ready or is locked.
