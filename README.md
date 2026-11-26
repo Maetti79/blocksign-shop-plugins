@@ -6,7 +6,7 @@ BlockSign eSign verknüpft Shop-Bestellungen mit elektronischen Unterschriften. 
 
 | Shop | Unterstützte Abläufe | Einrichtung |
 | --- | --- | --- |
-| WooCommerce | Ohne Zahlung, nach Zahlung und vor Zahlung im klassischen Checkout | [WooCommerce-README](plugins/woocommerce/README.md) |
+| WooCommerce | Ohne Zahlung, nach Zahlung und vor Zahlung im klassischen Checkout und in Checkout Blocks | [WooCommerce-README](plugins/woocommerce/README.md) |
 | PrestaShop 9 | Ohne Zahlung und nach Zahlung | [PrestaShop-README](plugins/prestashop/README.md) |
 
 GitHub Actions baut die Installationspakete. [Workflow und ZIP-Artefakte](https://github.com/Maetti79/blocksign-shop-plugins/actions/workflows/check.yml)

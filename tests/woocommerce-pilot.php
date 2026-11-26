@@ -65,6 +65,12 @@ class WC_Order
     public function save_meta_data(): void
     {
     }
+
+    public function save(): int
+    {
+        $GLOBALS['saved'] = $this->state;
+        return $this->get_id();
+    }
 }
 
 class WC_Product
@@ -100,13 +106,76 @@ class CheckoutInterrupted extends RuntimeException
 
 class RouteError extends RuntimeException
 {
-    public function __construct(string $error, string $message, int $status)
+    public function __construct(public string $error, string $message, int $status, public array $data = [])
     {
         parent::__construct($message, $status);
     }
 }
 
 class_alias(RouteError::class, 'Automattic\WooCommerce\StoreApi\Exceptions\RouteException');
+
+class WP_REST_Request
+{
+    public function __construct(private string $method, private string $route) {}
+    public function get_method(): string { return $this->method; }
+    public function get_route(): string { return $this->route; }
+}
+
+class WP_REST_Response
+{
+    public array $headers = ['Nonce' => 'fixture'];
+
+    public function __construct(private array $data, private int $status) {}
+    public function get_status(): int { return $this->status; }
+    public function get_data(): array { return $this->data; }
+    public function set_data(array $data): void { $this->data = $data; }
+    public function set_status(int $status): void { $this->status = $status; }
+}
+
+class FakePaymentResult
+{
+    public string $status = '';
+    public string $redirect = '';
+    public function set_status(string $status): void { $this->status = $status; }
+    public function set_redirect_url(string $url): void { $this->redirect = $url; }
+}
+
+class FakeCheckoutSchema
+{
+    public const IDENTIFIER = 'checkout';
+}
+
+class FakeStoreApi
+{
+    public static function container(): object
+    {
+        return new class {
+            public function get(string $name): self { return $this; }
+
+            public function get_item_response(object $item): array
+            {
+                return ['order_id' => $item->order->get_id(), 'payment_result' => [
+                    'payment_status' => $item->payment_result->status,
+                    'redirect_url' => $item->payment_result->redirect,
+                ]];
+            }
+        };
+    }
+}
+
+class_alias(FakePaymentResult::class, 'Automattic\WooCommerce\StoreApi\Payments\PaymentResult');
+class_alias(FakeCheckoutSchema::class, 'Automattic\WooCommerce\StoreApi\Schemas\V1\CheckoutSchema');
+class_alias(FakeStoreApi::class, 'Automattic\WooCommerce\StoreApi\StoreApi');
+
+function add_filter(string $hook, callable $callback, int $priority = 10, int $args = 1): void
+{
+    $GLOBALS['filters'][$hook] = $callback;
+}
+
+function has_action(string $hook, string $callback): bool
+{
+    return $GLOBALS['classic_details'] ?? false;
+}
 
 function get_option(string $name, mixed $default = false): mixed
 {
@@ -273,10 +342,36 @@ $order->total = 10;
 
 try {
     $hooks['woocommerce_store_api_checkout_order_processed']($order);
-    check(false, 'checkout blocks cannot start a before-payment order');
+    check(false, 'Checkout Blocks would call the gateway');
 } catch (RouteError $error) {
-    check($error->getCode() === 400 && $queued === [], 'checkout blocks was not stopped before payment');
+    check($error->getCode() === 409 && count($queued) === 1, 'Checkout Blocks did not defer to signatures');
+    check($saved['timing'] === 'before_payment' && !$order->paid && $order->method === '', 'unpaid order was not safely stored');
+    $filter = $filters['rest_request_after_callbacks'];
+    $data = ['code' => $error->error, 'data' => $error->data];
+    $unrelated = new WP_REST_Response($data, 409);
+    $filter($unrelated, [], new WP_REST_Request('POST', '/wc/store/v1/cart'));
+    check($unrelated->get_status() === 409, 'cart route was incorrectly modified');
+
+    $response = new WP_REST_Response($data, 409);
+    $result = $filter($response, [], new WP_REST_Request('POST', '/wc/store/v1/checkout'));
+    check($result === $response && $result->get_status() === 200 && $result->headers['Nonce'] === 'fixture', 'checkout response lost its session headers');
+    check($result->get_data() === ['order_id' => 42, 'payment_result' => [
+        'payment_status' => 'pending', 'redirect_url' => $order->get_checkout_order_received_url(),
+    ]], 'Checkout Blocks did not receive a pending payment and the order status link');
 }
+ob_start();
+$hooks['woocommerce_thankyou'](42);
+check(str_contains(ob_get_clean(), 'Reload this page'), 'block confirmation did not show signature instructions');
+$order->state['documents'][0]['completed'] = true;
+ob_start();
+$hooks['woocommerce_thankyou'](42);
+check(str_contains(ob_get_clean(), $order->get_checkout_payment_url()), 'block confirmation did not show the payment link');
+$classic_details = true;
+ob_start();
+$hooks['woocommerce_thankyou'](42);
+check(ob_get_clean() === '', 'classic confirmation would show duplicate payment links');
+echo "PASS Checkout Blocks payment deferral and confirmation\n";
+$queued = [];
 
 $order = new WC_Order([]);
 $order->total = 10;

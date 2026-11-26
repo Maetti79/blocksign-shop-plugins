@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BlockSign eSign for WooCommerce
  * Description: Release a free virtual product after BlockSign confirms its signature.
- * Version: 0.10.0
+ * Version: 0.11.0
  * Requires PHP: 8.1
  * Requires Plugins: woocommerce
  * License: GPL-3.0-or-later
@@ -24,6 +24,11 @@ use BlockSign\ESign\SignatureSettings;
 use BlockSign\ESign\SignatureWorkflow;
 use InvalidArgumentException;
 use RuntimeException;
+use Automattic\WooCommerce\StoreApi\Exceptions\RouteException;
+use Automattic\WooCommerce\StoreApi\Payments\PaymentResult;
+use Automattic\WooCommerce\StoreApi\SchemaController;
+use Automattic\WooCommerce\StoreApi\Schemas\V1\CheckoutSchema;
+use Automattic\WooCommerce\StoreApi\StoreApi;
 use Throwable;
 use WC_Order;
 use WC_Product;
@@ -47,6 +52,7 @@ const META = '_blocksign_esign';
 const JOB = 'blocksign_esign_check';
 const GROUP = 'blocksign-esign';
 const PRODUCT_FLAG = '_blocksign_esign_required';
+const CHECKOUT_DEFERRED = 'blocksign_esign_payment_deferred';
 
 function configured_product(): int
 {
@@ -145,7 +151,7 @@ add_action('admin_menu', static function (): void {
         echo '</select></p>';
         printf('<p><label for="blocksign-category">Category ID (category scope)</label> <input id="blocksign-category" type="number" min="0" name="blocksign_esign_scope[category_id]" value="%d" required></p>', $scope['category_id']);
         printf('<label for="blocksign_esign_product">Protected product ID</label> <input id="blocksign_esign_product" type="number" min="0" name="blocksign_esign_product" value="%d">', configured_product());
-        printf('<p><label for="blocksign-paid-timing">Signature timing for paid orders</label> <select id="blocksign-paid-timing" name="blocksign_esign_paid_timing"><option value="after_payment"%s>After payment</option><option value="before_payment"%s>Before payment (classic checkout)</option></select></p>',
+        printf('<p><label for="blocksign-paid-timing">Signature timing for paid orders</label> <select id="blocksign-paid-timing" name="blocksign_esign_paid_timing"><option value="after_payment"%s>After payment</option><option value="before_payment"%s>Before payment</option></select></p>',
             selected(paid_timing(), 'after_payment', false), selected(paid_timing(), 'before_payment', false));
         $settings = signature_settings();
         echo '<p><label for="blocksign-signature-level">Signature level or proof of delivery</label> <select id="blocksign-signature-level" name="blocksign_esign_signature[signature_level]">';
@@ -323,18 +329,52 @@ add_action('woocommerce_checkout_create_order', __NAMESPACE__ . '\\snapshot');
 add_action('woocommerce_store_api_checkout_order_processed', static function (WC_Order $order): void {
     try {
         snapshot($order);
-        $state = $order->get_meta(META);
-        if (($state['timing'] ?? '') === 'before_payment') {
-            throw new RuntimeException('This product requires the classic WooCommerce checkout to collect signatures before payment.');
-        }
+    } catch (RuntimeException | InvalidArgumentException $error) {
+        throw new RouteException('blocksign_checkout', $error->getMessage(), 400);
+    }
+
+    $state = $order->get_meta(META);
+    if (($state['timing'] ?? '') !== 'before_payment') {
         $order->save_meta_data();
         enqueue($order);
-    } catch (RuntimeException | InvalidArgumentException $error) {
-        throw new \Automattic\WooCommerce\StoreApi\Exceptions\RouteException(
-            'blocksign_checkout', $error->getMessage(), 400
-        );
+        return;
     }
-});
+
+    // Stop the Store API before it calls any gateway and keep the order payable on the native order-pay page.
+    $order->set_payment_method('');
+    $order->save();
+    enqueue($order);
+    WC()->session->set('order_awaiting_payment', $order->get_id());
+    WC()->session->save_data();
+    throw new RouteException(CHECKOUT_DEFERRED, 'Payment is waiting for BlockSign confirmation.', 409, ['order_id' => $order->get_id()]);
+}, 1);
+
+add_filter('rest_request_after_callbacks', static function ($response, array $handler, \WP_REST_Request $request) {
+    if (!$response instanceof \WP_REST_Response || $response->get_status() !== 409
+        || $request->get_method() !== 'POST' || !preg_match('~^/wc/store/v1/checkout(?:/[0-9]+)?/?$~D', $request->get_route())) {
+        return $response;
+    }
+
+    $error = $response->get_data();
+    if (($error['code'] ?? '') !== CHECKOUT_DEFERRED) {
+        return $response;
+    }
+    $order = wc_get_order((int) ($error['data']['order_id'] ?? 0));
+    if (!$order instanceof WC_Order || ($order->get_meta(META)['timing'] ?? '') !== 'before_payment'
+        || !$order->needs_payment()) {
+        return $response;
+    }
+
+    // Reuse the Store API schema and response object so checkout extensions and session headers are preserved.
+    $result = new PaymentResult();
+    $result->set_status('pending');
+    $result->set_redirect_url($order->get_checkout_order_received_url());
+    $schema = StoreApi::container()->get(SchemaController::class)->get(CheckoutSchema::IDENTIFIER);
+    $data = $schema->get_item_response((object) ['order' => $order, 'payment_result' => $result]);
+    $response->set_data($data);
+    $response->set_status(200);
+    return $response;
+}, 10, 3);
 
 function enqueue(WC_Order $order): void
 {
@@ -512,7 +552,8 @@ function download_allowed(WC_Order $order, array $state): bool
         && Gate::allows('fulfillment', [['timing' => $state['timing'] ?? 'without_payment', 'completed' => RequiredSignatures::complete($state)]]);
 }
 
-add_action('woocommerce_order_details_after_order_table', static function (WC_Order $order): void {
+function show_order_state(WC_Order $order): void
+{
     $state = $order->get_meta(META);
     if (!$state) {
         return;
@@ -540,6 +581,19 @@ add_action('woocommerce_order_details_after_order_table', static function (WC_Or
         ], admin_url('admin-post.php'));
         printf('<p><a href="%s">Download %s</a></p>', esc_url($url), esc_html($file['file']));
     }
+}
+
+add_action('woocommerce_order_details_after_order_table', __NAMESPACE__ . '\show_order_state');
+
+add_action('woocommerce_thankyou', static function (int $orderId): void {
+    // The block confirmation template calls this hook after removing the classic order details table.
+    if (!has_action('woocommerce_thankyou', 'woocommerce_order_details_table')) {
+        $order = wc_get_order($orderId);
+        if ($order instanceof WC_Order) {
+            show_order_state($order);
+        }
+    }
+
 });
 
 function download(): void
