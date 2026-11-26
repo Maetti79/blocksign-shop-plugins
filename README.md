@@ -18,7 +18,7 @@ GitHub Actions baut die Installationspakete. [Workflow und ZIP-Artefakte](https:
 - **Ein oder mehrere Pflichtdokumente**, auch je Produktkategorie, mit EES, FES oder QES sowie PDF-Seite und X/Y-Position je Dokument.
 - **Elektronische Zustellnachweise** als Alternative zur Signatur für einzelne Pflichtdokumente.
 - **Private Ablage von Nachweisen** für signierte PDFs, Audit-Trails und zugestellte PDFs.
-- **Versandfreigabe in WooCommerce und PrestaShop** für markierte physische Produkte nach Bestätigung der Pflichtdokumente.
+- **Versandfreigabe** für ausgewählte physische Produkte nach Bestätigung der Pflichtdokumente.
 - **Automatische Zugangsfreigabe** zu privaten Seiten in WooCommerce und per Kundengruppe in PrestaShop und Shopware.
 - **Geschützter Download** mit einer Freigabeprüfung anhand des Bestell-, Zahlungs- und Signaturstatus.
 

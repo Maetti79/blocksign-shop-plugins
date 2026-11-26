@@ -36,11 +36,16 @@ final class Fulfillment
         }
         $products = [];
         foreach ($order->getLineItems() ?? [] as $item) {
-            if ($item->getProductId() && $item->getQuantity() > 0) {
-                $products[] = $item->getProductId();
+            $id = $item->getProductId();
+            if ($id && $item->getQuantity() > 0) {
+                $products[$id] = ($products[$id] ?? 0) + $item->getQuantity();
             }
         }
-        if (array_diff($state['products'], $products)) {
+        if (array_is_list($state['products'])) {
+            if (array_diff($state['products'], array_keys($products))) {
+                return false;
+            }
+        } elseif (array_diff_assoc($state['products'], $products)) {
             return false;
         }
         foreach ($order->getTransactions() ?? [] as $transaction) {

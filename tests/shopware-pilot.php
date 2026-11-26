@@ -152,6 +152,10 @@ namespace {
     if ($rules->cart($changed, $context)[0] === $proof) {
         throw new RuntimeException('Changed quantities kept an old confirmation fingerprint.');
     }
+    $reordered = new Cart([new LineItem('early'), new LineItem('late')], 24.0);
+    if ($rules->cart($reordered, $context)[0] !== $proof || $state['products'] !== ['early' => 1, 'late' => 1]) {
+        throw new RuntimeException('The confirmation must be stable across line order and retain protected quantities.');
+    }
     $config->values['enabled'] = false;
     if ($rules->cart($cart, $context) !== null) {
         throw new RuntimeException('A disabled sales channel was blocked.');

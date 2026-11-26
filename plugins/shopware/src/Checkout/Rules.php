@@ -61,19 +61,25 @@ final class Rules
             return null;
         }
         $ids = [];
-        $lines = [];
+        $quantities = [];
         foreach ($cart->getLineItems()->getFlat() as $item) {
             $id = $item->getReferencedId();
             if ($item->getType() === LineItem::PRODUCT_LINE_ITEM_TYPE && $id) {
                 $ids[$id] = $id;
-                $lines[] = [$id, $item->getQuantity()];
+                $quantities[$id] = ($quantities[$id] ?? 0) + $item->getQuantity();
             }
         }
         if (!$ids) {
             return null;
         }
-        sort($lines);
-        $products = $this->products->search((new Criteria(array_values($ids)))->addAssociation('categories'), $context->getContext());
+        ksort($quantities);
+        $products = [];
+        foreach ($this->products->search((new Criteria(array_values($ids)))->addAssociation('categories'), $context->getContext()) as $product) {
+            if ($product instanceof ProductEntity) {
+                $products[$product->getId()] = $product;
+            }
+        }
+        ksort($products);
         $rules = json_decode($this->get('productRules', $channel) ?: '{}', true, 512, JSON_THROW_ON_ERROR);
         if (!is_array($rules)) {
             throw new \RuntimeException('Enter product and category settings as a JSON object.');
@@ -81,11 +87,7 @@ final class Rules
         $timings = ['after_payment' => [], 'before_payment' => [], 'before_order' => []];
         $downloads = $protected = $shipping = [];
         $membership = null;
-        foreach ($products as $product) {
-            if (!$product instanceof ProductEntity) {
-                continue;
-            }
-            $id = $product->getId();
+        foreach ($products as $id => $product) {
             $rule = self::rule($product, $rules, $this->get('scope', $channel));
             if (!$rule) {
                 continue;
@@ -119,7 +121,7 @@ final class Rules
                 }
                 $membership = $group;
             }
-            $protected[] = $id;
+            $protected[$id] = $quantities[$id];
             foreach ($snapshot['documents'] as $document) {
                 $key = json_encode([$document['file'], $document['agreement_hash'], $document['placement']], JSON_THROW_ON_ERROR);
                 $timings[$timing][$key] = $document;
@@ -151,7 +153,7 @@ final class Rules
             'documents' => array_values($before),
             'after' => array_values($after),
         ];
-        $identity = [$cart->getToken(), $lines, $state];
+        $identity = [$cart->getToken(), $quantities, $state];
 
         return [hash_hmac('sha256', json_encode($identity, JSON_THROW_ON_ERROR), $this->cartSecret), $state];
     }
