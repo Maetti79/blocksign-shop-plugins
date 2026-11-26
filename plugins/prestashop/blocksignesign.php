@@ -2,6 +2,7 @@
 
 use BlockSign\ESign\Client;
 use BlockSign\ESign\Gate;
+use BlockSign\ESign\RequiredSignatures;
 use BlockSign\ESign\SignatureSettings;
 use BlockSign\ESign\SignatureWorkflow;
 
@@ -13,16 +14,18 @@ require_once __DIR__ . '/core/Client.php';
 require_once __DIR__ . '/core/Gate.php';
 require_once __DIR__ . '/core/SignatureSettings.php';
 require_once __DIR__ . '/core/SignatureWorkflow.php';
+require_once __DIR__ . '/core/RequiredSignatures.php';
 
 class BlocksignEsign extends Module
 {
     private const PRODUCT = 'BLOCKSIGN_ESIGN_PRODUCT';
     private const SIGNATURE = 'BLOCKSIGN_ESIGN_SIGNATURE';
+    private const DOCUMENTS = 'BLOCKSIGN_ESIGN_DOCUMENTS';
 
     public function __construct()
     {
         $this->name = 'blocksignesign';
-        $this->version = '0.1.0';
+        $this->version = '0.2.0';
         $this->author = 'BlockSign';
         $this->tab = 'administration';
         $this->ps_versions_compliancy = ['min' => '9.0.0', 'max' => _PS_VERSION_];
@@ -63,7 +66,13 @@ class BlocksignEsign extends Module
                 if ($productId === false) {
                     throw new InvalidArgumentException('Enter a valid product ID.');
                 }
-                if (!Configuration::updateValue(self::SIGNATURE, json_encode($placement, JSON_THROW_ON_ERROR))
+                $documents = Tools::getValue(self::DOCUMENTS, '');
+                if (!is_string($documents)) {
+                    throw new InvalidArgumentException('Enter one PDF per line.');
+                }
+                RequiredSignatures::parseAdditional($documents);
+                if (!Configuration::updateValue(self::DOCUMENTS, trim($documents))
+                    || !Configuration::updateValue(self::SIGNATURE, json_encode($placement, JSON_THROW_ON_ERROR))
                     || !Configuration::updateValue(self::PRODUCT, $productId)) {
                     throw new RuntimeException('Could not save the BlockSign settings.');
                 }
@@ -81,6 +90,7 @@ class BlocksignEsign extends Module
         $settings = self::signatureSettings();
         $form->fields_value = [
             self::PRODUCT => (int) Configuration::get(self::PRODUCT),
+            self::DOCUMENTS => (string) Configuration::get(self::DOCUMENTS),
             'blocksign_level' => $settings['signature_level'],
             'blocksign_page' => $settings['page'],
             'blocksign_x' => $settings['x'],
@@ -108,6 +118,12 @@ class BlocksignEsign extends Module
                 'type' => 'text', 'name' => 'blocksign_x', 'label' => 'X from left',
             ], [
                 'type' => 'text', 'name' => 'blocksign_y', 'label' => 'Y from top',
+            ], [
+                'type' => 'textarea',
+                'name' => self::DOCUMENTS,
+                'label' => 'Additional required PDFs',
+                'desc' => 'One private PDF per line, for example: mandate.pdf | EES | 1 | 50 | 50',
+                'rows' => 5,
             ]],
             'submit' => ['title' => 'Save'],
         ]]]);
@@ -139,19 +155,19 @@ class BlocksignEsign extends Module
             }
 
             try {
-                $agreement = hash_file('sha256', self::asset('agreement.pdf'));
                 $download = hash_file('sha256', self::asset('download.pdf'));
-                if (!$agreement || !$download) {
+                if (!$download) {
                     throw new RuntimeException('Could not read the private files.');
                 }
                 $state = [
                     'product_id' => $productId,
-                    'agreement_hash' => $agreement,
                     'download_hash' => $download,
                     'signer_email' => $customer->email,
-                    'phase' => 'upload',
-                    'completed' => false,
-                    'placement' => self::signatureSettings((int) $order->id_shop),
+                    'documents' => RequiredSignatures::snapshot(
+                        self::signatureSettings((int) $order->id_shop),
+                        RequiredSignatures::parseAdditional((string) Configuration::get(self::DOCUMENTS, null, null, (int) $order->id_shop)),
+                        self::asset(...)
+                    ),
                 ];
                 $saved = Db::getInstance()->insert('blocksign_esign', [
                     'id_order' => (int) $order->id,
@@ -228,7 +244,7 @@ class BlocksignEsign extends Module
     public static function downloadAllowed(Order $order, array $state): bool
     {
         return self::orderEligible($order, $state)
-            && Gate::allows('fulfillment', [['timing' => 'without_payment', 'completed' => $state['completed']]]);
+            && Gate::allows('fulfillment', [['timing' => 'without_payment', 'completed' => RequiredSignatures::complete($state)]]);
     }
 
     public static function asset(string $name): string
@@ -317,19 +333,20 @@ class BlocksignEsign extends Module
         $state = json_decode($row['state'], true, 512, JSON_THROW_ON_ERROR);
         $retry = false;
         if ((int) $row['id_shop'] === (int) $order->id_shop
-            && self::orderEligible($order, $state) && !$state['completed']
-            && !str_ends_with($state['phase'], '_pending_review') && time() - (int) $row['created_at'] < 604800) {
+            && self::orderEligible($order, $state) && !RequiredSignatures::complete($state)
+            && !RequiredSignatures::needsReview($state) && time() - (int) $row['created_at'] < 604800) {
             try {
-                $retry = $workflow->advance(
+                $retry = RequiredSignatures::advance(
+                    $workflow,
                     $state,
                     static function (array $next) use ($id, &$state): void {
                         self::updateRow($id, ['state' => pSQL(json_encode($next, JSON_THROW_ON_ERROR), true)]);
                         $state = $next;
                     },
-                    static fn () => file_get_contents(self::asset('agreement.pdf'), false, null, 0, 10 * 1024 * 1024 + 1)
+                    static fn (string $file) => file_get_contents(self::asset($file), false, null, 0, 10 * 1024 * 1024 + 1)
                 );
             } catch (Throwable $error) {
-                $retry = !str_ends_with($state['phase'], '_pending_review');
+                $retry = !RequiredSignatures::needsReview($state);
                 if (!$retry) {
                     PrestaShopLogger::addLog('BlockSign creation needs manual review.', 3, null, 'Order', $id);
                 }

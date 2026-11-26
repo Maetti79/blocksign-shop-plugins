@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BlockSign eSign for WooCommerce
  * Description: Release a free virtual product after BlockSign confirms its signature.
- * Version: 0.1.0
+ * Version: 0.2.0
  * Requires PHP: 8.1
  * Requires Plugins: woocommerce
  * License: GPL-3.0-or-later
@@ -14,6 +14,7 @@ namespace BlockSign\WooCommerce;
 
 use BlockSign\ESign\Client;
 use BlockSign\ESign\Gate;
+use BlockSign\ESign\RequiredSignatures;
 use BlockSign\ESign\SignatureSettings;
 use BlockSign\ESign\SignatureWorkflow;
 use InvalidArgumentException;
@@ -30,6 +31,7 @@ require_once __DIR__ . '/core/Gate.php';
 require_once __DIR__ . '/core/Client.php';
 require_once __DIR__ . '/core/SignatureSettings.php';
 require_once __DIR__ . '/core/SignatureWorkflow.php';
+require_once __DIR__ . '/core/RequiredSignatures.php';
 
 const META = '_blocksign_esign';
 const JOB = 'blocksign_esign_check';
@@ -57,6 +59,21 @@ add_action('admin_init', static function (): void {
             }
         },
     ]);
+    register_setting('blocksign_esign', 'blocksign_esign_documents', [
+        'type' => 'string',
+        'sanitize_callback' => static function ($value): string {
+            try {
+                if (!is_string($value)) {
+                    throw new InvalidArgumentException('Enter one PDF per line.');
+                }
+                RequiredSignatures::parseAdditional($value);
+                return trim($value);
+            } catch (InvalidArgumentException $error) {
+                add_settings_error('blocksign_esign_documents', 'invalid_documents', $error->getMessage());
+                return (string) get_option('blocksign_esign_documents', '');
+            }
+        },
+    ]);
     register_setting('blocksign_esign', 'blocksign_esign_product', [
         'type' => 'integer',
         'sanitize_callback' => 'absint',
@@ -65,7 +82,9 @@ add_action('admin_init', static function (): void {
 
 add_action('admin_menu', static function (): void {
     add_options_page('BlockSign eSign', 'BlockSign eSign', 'manage_options', 'blocksign-esign', static function (): void {
-        echo '<div class="wrap"><h1>BlockSign eSign</h1><form action="options.php" method="post">';
+        echo '<div class="wrap"><h1>BlockSign eSign</h1>';
+        settings_errors();
+        echo '<form action="options.php" method="post">';
         settings_fields('blocksign_esign');
         printf('<label for="blocksign_esign_product">Protected product ID</label> <input id="blocksign_esign_product" type="number" min="0" name="blocksign_esign_product" value="%d">', configured_product());
         $settings = signature_settings();
@@ -78,6 +97,8 @@ add_action('admin_menu', static function (): void {
             printf('<p><label for="blocksign-%1$s">%2$s</label> <input id="blocksign-%1$s" name="blocksign_esign_signature[%1$s]" type="number" min="%3$d" step="%4$s" value="%5$s" required></p>',
                 esc_attr($key), esc_html($label), $key === 'page' ? 1 : 0, $key === 'page' ? '1' : 'any', esc_attr((string) $settings[$key]));
         }
+        printf('<p><label for="blocksign-esign-documents">Additional required PDFs</label><br><textarea id="blocksign-esign-documents" name="blocksign_esign_documents" rows="5" cols="70" aria-describedby="blocksign-documents-help">%s</textarea><br><span id="blocksign-documents-help">One private PDF per line, for example: mandate.pdf | EES | 1 | 50 | 50</span></p>',
+            esc_textarea(get_option('blocksign_esign_documents', '')));
         submit_button();
         echo '</form></div>';
     });
@@ -126,20 +147,20 @@ function snapshot(WC_Order $order): void
             throw new RuntimeException('BlockSign is not configured.');
         }
 
-        $agreement = hash_file('sha256', asset('agreement.pdf'));
         $download = hash_file('sha256', asset('download.pdf'));
-        if (!$agreement || !$download) {
+        if (!$download) {
             throw new RuntimeException('BlockSign private files could not be read.');
         }
 
         $order->update_meta_data(META, [
             'product_id' => $productId,
-            'agreement_hash' => $agreement,
             'download_hash' => $download,
             'signer_email' => $order->get_billing_email(),
-            'phase' => 'upload',
-            'completed' => false,
-            'placement' => signature_settings(),
+            'documents' => RequiredSignatures::snapshot(
+                signature_settings(),
+                RequiredSignatures::parseAdditional(get_option('blocksign_esign_documents', '')),
+                asset(...)
+            ),
         ]);
         return;
     }
@@ -209,10 +230,11 @@ function persist(WC_Order $order, array $state): void
 
 function advance(WC_Order $order, array $state): bool
 {
-    return (new SignatureWorkflow(client()))->advance(
+    return RequiredSignatures::advance(
+        new SignatureWorkflow(client()),
         $state,
         static fn (array $next) => persist($order, $next),
-        static fn () => file_get_contents(asset('agreement.pdf'), false, null, 0, 10 * 1024 * 1024 + 1)
+        static fn (string $file) => file_get_contents(asset($file), false, null, 0, 10 * 1024 * 1024 + 1)
     );
 }
 
@@ -225,7 +247,7 @@ add_action(JOB, static function (int $id): void {
     try {
         $order = wc_get_order($id);
         $state = $order ? $order->get_meta(META) : [];
-        if (!$state || $state['completed'] || $order->has_status(['cancelled', 'refunded', 'failed'])) {
+        if (!$state || RequiredSignatures::complete($state) || $order->has_status(['cancelled', 'refunded', 'failed'])) {
             return;
         }
 
@@ -233,7 +255,7 @@ add_action(JOB, static function (int $id): void {
             $retry = advance($order, $state);
         } catch (Throwable $error) {
             $state = $order->get_meta(META);
-            $retry = !str_ends_with($state['phase'], '_pending_review');
+            $retry = !RequiredSignatures::needsReview($state);
             if (!$retry) {
                 $order->add_order_note('BlockSign creation needs review before retrying.');
             }
@@ -250,7 +272,7 @@ add_action(JOB, static function (int $id): void {
 function download_allowed(WC_Order $order, array $state): bool
 {
     return $state && !$order->has_status(['cancelled', 'refunded', 'failed', 'checkout-draft'])
-        && Gate::allows('fulfillment', [['timing' => 'without_payment', 'completed' => $state['completed']]]);
+        && Gate::allows('fulfillment', [['timing' => 'without_payment', 'completed' => RequiredSignatures::complete($state)]]);
 }
 
 add_action('woocommerce_order_details_after_order_table', static function (WC_Order $order): void {
@@ -259,7 +281,7 @@ add_action('woocommerce_order_details_after_order_table', static function (WC_Or
         return;
     }
     if (!download_allowed($order, $state)) {
-        echo '<p>BlockSign: the download is locked until your signature is confirmed.</p>';
+        echo '<p>BlockSign: the download is locked until all required signatures are confirmed.</p>';
         return;
     }
     $url = add_query_arg([

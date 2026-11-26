@@ -58,7 +58,7 @@ class BlocksignEsignDocumentModuleFrontController extends ModuleFrontController
         $message = $allowed
             ? '<a href="' . BlocksignEsign::escape($url) . '">Download PDF</a>'
             : ((int) $row['next_attempt'] > 0
-                ? 'Your download will be available here after your signature is confirmed. Check your email for the invitation and reload this page after signing.'
+                ? 'Your download will be available here after all required signatures are confirmed. Check your email for the invitations and reload this page after signing.'
                 : 'The download is locked. Contact the shop for help with this order.');
 
         header('Content-Type: text/html; charset=UTF-8');

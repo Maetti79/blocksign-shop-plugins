@@ -1,6 +1,6 @@
 # BlockSign eSign für Shops
 
-Zwei Pakete teilen die Freigaberegeln. Das PHP-Paket enthält zusätzlich den ersten BlockSign-REST-Client. Die Piloten für WooCommerce und PrestaShop verarbeiten kostenlose Bestellungen für geschützte PDFs. Die gemeinsamen Testdaten prüfen auch die Entscheidung vor Bestellung, vor Zahlung und nach Zahlung. Die dazugehörigen bezahlten WooCommerce-Abläufe, mehrere Dokumente, Zustellnachweise und weitere Shop-Adapter sind zukünftige Ausbaustufen.
+Zwei Pakete teilen die Freigaberegeln. Das PHP-Paket enthält zusätzlich den ersten BlockSign-REST-Client. Die Piloten für WooCommerce und PrestaShop verarbeiten kostenlose Bestellungen für geschützte PDFs. Die gemeinsamen Testdaten prüfen auch die Entscheidung vor Bestellung, vor Zahlung und nach Zahlung. Die dazugehörigen bezahlten Abläufe, Zustellnachweise und weitere Shop-Adapter sind zukünftige Ausbaustufen.
 
 ## WooCommerce-Pilot
 
@@ -34,6 +34,19 @@ Im Testshop sind insbesondere Modulinstallation, normaler und Gast-Checkout, E-M
 ## Signaturniveau und Position
 
 Beide Module bieten EES, FES und QES an. X und Y werden in PDF-Einheiten vom linken bzw. oberen Seitenrand gemessen. Standard ist EES auf Seite 1 bei X/Y = 50/50. Die Bestellung speichert die gewählten Werte. Ältere Bestellungen behalten ihre bisherigen Standardwerte. Welche Signaturstufen genutzt werden können, hängt vom BlockSign-Konto ab.
+
+## Mehrere Pflichtdokumente
+
+Beide Shop-Module verwenden `agreement.pdf` als erstes Pflichtdokument. Hinterlege weitere PDF-Dateien im selben privaten Verzeichnis und trage sie unter **Additional required PDFs** ein, eine pro Zeile.
+
+```text
+mandate.pdf | EES | 1 | 50 | 50
+terms.pdf | FES | 2 | 12.5 | 40
+```
+
+Die Felder geben Dateiname, Signaturniveau, PDF-Seite und X/Y-Koordinaten an. Verwende eindeutige PDF-Dateinamen ohne Verzeichnispfad. `agreement.pdf` und `download.pdf` sind reserviert. Die Bestellung speichert die Dokumentliste, die Signaturparameter und die Dateihashes beim Kauf. Bestehende Bestellungen behalten ihre bisherigen Anforderungen.
+
+Der Worker startet das nächste Dokument, nachdem BlockSign das vorherige bestätigt hat. Der Shop gibt den Download erst frei, wenn alle Pflichtdokumente unterschrieben sind. Ein abgebrochener oder abgelaufener Vorgang hält die Freigabe gesperrt.
 
 ## Pakete testen
 
