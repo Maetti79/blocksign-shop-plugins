@@ -14,6 +14,7 @@ namespace BlockSign\WooCommerce;
 
 use BlockSign\ESign\Client;
 use BlockSign\ESign\Gate;
+use BlockSign\ESign\SignatureWorkflow;
 use RuntimeException;
 use Throwable;
 use WC_Order;
@@ -25,6 +26,7 @@ if (!defined('ABSPATH')) {
 
 require_once __DIR__ . '/core/Gate.php';
 require_once __DIR__ . '/core/Client.php';
+require_once __DIR__ . '/core/SignatureWorkflow.php';
 
 const META = '_blocksign_esign';
 const JOB = 'blocksign_esign_check';
@@ -177,74 +179,11 @@ function persist(WC_Order $order, array $state): void
 
 function advance(WC_Order $order, array $state): bool
 {
-    $client = client();
-    if ($state['phase'] === 'upload') {
-        $path = asset('agreement.pdf');
-        $pdf = file_get_contents($path, false, null, 0, 10 * 1024 * 1024 + 1);
-        if ($pdf === false || strlen($pdf) > 10 * 1024 * 1024
-            || !hash_equals($state['agreement_hash'], hash('sha256', $pdf))) {
-            throw new RuntimeException('Agreement file does not match the order.');
-        }
-
-        $state['phase'] = 'upload_pending_review';
-        persist($order, $state);
-        $state['document_id'] = $client->upload($pdf);
-        $state['phase'] = 'prepare';
-        persist($order, $state);
-    }
-
-    if ($state['phase'] === 'prepare') {
-        $state['phase'] = 'prepare_pending_review';
-        persist($order, $state);
-        try {
-            $state['request_id'] = $client->prepare(
-                $state['document_id'],
-                ['signer_email' => $state['signer_email']],
-                ['signature_level' => 'aes', 'page' => 1, 'x' => 50, 'y' => 50]
-            );
-        } catch (RuntimeException $error) {
-            // The documented 409 means the document is not ready or is locked.
-            if ($error->getCode() !== 409) {
-                throw $error;
-            }
-            $state['phase'] = 'prepare';
-            persist($order, $state);
-            return true;
-        }
-
-        $state['phase'] = 'send';
-        persist($order, $state);
-    }
-
-    if ($state['phase'] === 'send') {
-        $status = $client->send($state['request_id']);
-        if (empty($status['sent_at']) && ($status['completed'] ?? false) !== true) {
-            return true;
-        }
-        $state['phase'] = 'status';
-        persist($order, $state);
-    }
-
-    if ($state['phase'] === 'status') {
-        $status = $client->status($state['request_id']);
-        if (($status['request_id'] ?? null) !== $state['request_id']
-            || ($status['document_id'] ?? null) !== $state['document_id']) {
-            throw new RuntimeException('BlockSign response does not match the order.');
-        }
-        if (($status['completed'] ?? false) === true) {
-            foreach ($status['signers'] ?? [] as $signer) {
-                if (!empty($signer['signed_at']) && strcasecmp($signer['email'] ?? '', $state['signer_email']) === 0) {
-                    $state['completed'] = true;
-                    persist($order, $state);
-                    return false;
-                }
-            }
-            throw new RuntimeException('BlockSign has not confirmed the expected signer.');
-        }
-        return !in_array($status['status'] ?? '', ['canceled', 'cancelled', 'declined', 'expired'], true);
-    }
-
-    return false;
+    return (new SignatureWorkflow(client()))->advance(
+        $state,
+        static fn (array $next) => persist($order, $next),
+        static fn () => file_get_contents(asset('agreement.pdf'), false, null, 0, 10 * 1024 * 1024 + 1)
+    );
 }
 
 add_action(JOB, static function (int $id): void {

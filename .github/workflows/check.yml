@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: find packages/php plugins -name '*.php' -exec php -l {} \;
+      - run: find packages/php plugins tests -name '*.php' -print0 | xargs -0 -n1 php -l
       - run: php tests/gate.php
       - run: npm --prefix packages/typescript ci
       - run: npm --prefix packages/typescript test
@@ -23,3 +23,9 @@ jobs:
         with:
           name: blocksign-esign-woocommerce
           path: build/blocksign-esign-woocommerce.zip
+      - run: scripts/build-prestashop.sh
+      - run: unzip -q build/blocksign-esign-prestashop.zip -d build && php tests/prestashop-pilot.php build/blocksignesign
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blocksign-esign-prestashop
+          path: build/blocksign-esign-prestashop.zip

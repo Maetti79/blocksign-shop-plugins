@@ -1,6 +1,6 @@
 # BlockSign eSign für Shops
 
-Zwei Pakete teilen die Freigaberegeln. Das PHP-Paket enthält zusätzlich den ersten BlockSign-REST-Client. Der WooCommerce-Pilot verarbeitet eine kostenlose Bestellung für ein geschütztes PDF. Die gemeinsamen Testdaten prüfen auch die Entscheidung vor Bestellung, vor Zahlung und nach Zahlung. Die dazugehörigen bezahlten WooCommerce-Abläufe, mehrere Dokumente, Zustellnachweise und die übrigen Shop-Adapter sind zukünftige Ausbaustufen.
+Zwei Pakete teilen die Freigaberegeln. Das PHP-Paket enthält zusätzlich den ersten BlockSign-REST-Client. Die Piloten für WooCommerce und PrestaShop verarbeiten kostenlose Bestellungen für geschützte PDFs. Die gemeinsamen Testdaten prüfen auch die Entscheidung vor Bestellung, vor Zahlung und nach Zahlung. Die dazugehörigen bezahlten WooCommerce-Abläufe, mehrere Dokumente, Zustellnachweise und weitere Shop-Adapter sind zukünftige Ausbaustufen.
 
 ## WooCommerce-Pilot
 
@@ -17,6 +17,19 @@ Action Scheduler benötigt einen funktionierenden WordPress-Cron. Die Statusabfr
 ### Prüfung vor einem Live-Einsatz
 
 Führe in einem Testshop eine Gast- und eine Kontobestellung durch. Prüfe die Sperre vor Abschluss, die BlockSign-Einladung, das Erscheinen des Links nach Bestätigung, den Download und den verweigerten Zugriff mit ungültigem Bestellschlüssel. Prüfe klassischen Checkout und Checkout Blocks separat. In dieser Repository-Version wurde der Live-Ablauf mit WooCommerce und einem BlockSign-API-Key noch nicht verifiziert.
+
+## PrestaShop-Pilot
+
+1. Erstelle die Modul-ZIP mit `scripts/build-prestashop.sh` oder lade das Artefakt aus GitHub Actions herunter. Installiere darin `blocksign-esign-prestashop.zip` über den Modulmanager eines **PrestaShop-9-Testshops**.
+2. Lege ein einzelnes virtuelles Produkt für **0 €** an. Hinterlege dafür weder einen PrestaShop-Download noch einen öffentlich erreichbaren Anhang. Trage die Produkt-ID in der Modulkonfiguration ein. Der Pilot verarbeitet eine kostenlose Bestellung mit genau einem Exemplar dieses Produkts.
+3. Lege `agreement.pdf` und `download.pdf` in einem privaten Verzeichnis außerhalb des Webroots ab. Setze `BLOCKSIGN_ESIGN_FILES` auf diesen absoluten Pfad, sowohl für den Web-PHP-Prozess als auch für den Worker. Die Erklärung benötigt auf Seite 1 Platz bei X/Y = 50/50. Der Pilot verwendet EES.
+4. Stelle dem Worker `BLOCKSIGN_ESIGN_API_KEY` über die Secret-Konfiguration des Servers bereit. Lasse jede Minute `php /pfad/zum/shop/modules/blocksignesign/worker.php` unter dem Shop-Benutzer laufen. Das CLI-PHP benötigt cURL.
+
+PrestaShop zeigt den Statuslink auf der Bestellbestätigung und in der Bestellansicht. Gäste können den Link auch über die PrestaShop-Gastbestellverfolgung aufrufen. Ein Gastlink enthält einen vertraulichen, zufälligen Schlüssel pro Bestellung. Kunden mit Konto müssen zusätzlich angemeldet sein. Der Modul-Endpunkt prüft Bestellung, Schlüssel, Signaturstatus und Dateihash bei jedem Download. Wiederholte Bestellmeldungen behalten den vorhandenen Vorgang bei.
+
+Der Worker verarbeitet bis zu 20 fällige Vorgänge pro Lauf. Er lädt die Erklärung hoch, sendet die BlockSign-Einladung und fragt den Status bis zu sieben Tage ab. Bei einem unklaren Ergebnis der Erstellung hält er den betroffenen Vorgang an und protokolliert den Fall. Ersetze die privaten Pilotdateien bei offenen oder weiterhin abrufbaren Bestellungen nur durch Dateien mit identischem Inhalt. Deaktivieren oder Deinstallieren des Moduls unterbricht den Zugriff. Beim Deinstallieren bleibt die Statustabelle für bestehende Nachweise erhalten.
+
+Im Testshop sind insbesondere Modulinstallation, normaler und Gast-Checkout, E-Mail-Einladung, Statuslink, Download-Sperre und anschließende Freigabe mit einem BlockSign-Testkonto zu prüfen. Die CI deckt Registrierung, Signaturablauf und Freigabeentscheidung mit simulierten Abhängigkeiten ab.
 
 ## Pakete testen
 
