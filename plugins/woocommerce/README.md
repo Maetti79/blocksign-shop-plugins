@@ -77,6 +77,14 @@ Nach der Zahlung führt WooCommerce eine noch offene Bestellung unter **Awaiting
 
 Versand- und ERP-Integrationen müssen den WooCommerce-Status **Processing** abwarten. Eine Integration, die schon auf das Zahlungsevent versendet, braucht eine eigene Sperre. Prüfe den Ablauf mit deinem Zahlungsanbieter und deiner Versandsoftware im Testshop. Nachnahme wird für geschützte Bestellungen nicht unterstützt.
 
+## Mitgliederbereich oder Kundenzugang freigeben
+
+Erstelle eine **private WordPress-Seite** ohne Seitenpasswort und trage ihre ID bei einem einfachen virtuellen Produkt unter **Produktdaten → Allgemein → BlockSign private access page ID** ein. Käufer müssen sich vor dem Checkout anmelden. Die Produktzuordnung gilt unabhängig vom gewählten Bereich für PDF-Downloads. Eine Download-Datei ist für das Zugangsprodukt nicht erforderlich.
+
+Sobald die Zahlung und alle Pflichtdokumente bestätigt sind, erscheint der Link in der Bestellansicht unter **Mein Konto**. Bei jedem Aufruf prüft der Shop das angemeldete Kundenkonto, die Bestellposition sowie den Zahlungs- und Bestätigungsstatus. Stornierte oder erstattete Bestellungen verlieren den Zugang. Änderungen der Seiten-ID am Produkt gelten für neue Bestellungen. Die Seite muss auch danach privat bleiben.
+
+Der geschützte Bereich gibt den gespeicherten Seiteninhalt aus. Verwende dort keine vertraulichen Dateien aus der öffentlich erreichbaren WordPress-Mediathek. Für solche PDFs steht der geschützte Download des Moduls zur Verfügung.
+
 ## Elektronischer Zustellnachweis
 
 Wähle **Proof of delivery** für das erste Pflichtdokument. Für ein zusätzliches PDF verwende die Kurzform `mitteilung.pdf | POD`. Bei einer Kategorie stellst du ihre ID voran, zum Beispiel `21 | mitteilung.pdf | POD`. BlockSign versendet das Dokument zur Empfangsbestätigung. Für diesen Vorgang sind keine Signaturposition oder Signaturstufe erforderlich.

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BlockSign eSign for WooCommerce
  * Description: Release a free virtual product after BlockSign confirms its signature.
- * Version: 0.14.0
+ * Version: 0.15.0
  * Requires PHP: 8.1
  * Requires Plugins: woocommerce
  * License: GPL-3.0-or-later
@@ -52,6 +52,7 @@ const META = '_blocksign_esign';
 const JOB = 'blocksign_esign_check';
 const GROUP = 'blocksign-esign';
 const PRODUCT_FLAG = '_blocksign_esign_required';
+const ACCESS_PAGE = '_blocksign_esign_access_page';
 const SHIPPING_FLAG = '_blocksign_esign_shipping';
 const SHIPPING_HOLD = 'bsesign-hold';
 const CHECKOUT_DEFERRED = 'blocksign_esign_payment_deferred';
@@ -196,6 +197,15 @@ add_action('woocommerce_product_options_general_product_data', static function (
             'wrapper_class' => 'show_if_simple',
         ]);
     }
+    woocommerce_wp_text_input([
+        'id' => ACCESS_PAGE,
+        'label' => 'BlockSign private access page ID',
+        'type' => 'number',
+        'custom_attributes' => ['min' => 0, 'step' => 1],
+        'value' => $product_object->get_meta(ACCESS_PAGE),
+        'description' => 'For a simple virtual access product, enter a private WordPress page ID. Leave blank to disable.',
+        'wrapper_class' => 'show_if_simple',
+    ]);
     foreach (ProductFiles::DEFAULTS as $kind => $default) {
         $key = '_blocksign_esign_' . $kind . '_file';
         woocommerce_wp_text_input([
@@ -218,6 +228,18 @@ add_action('woocommerce_admin_process_product_object', static function (WC_Produ
             $product->delete_meta_data($key);
         }
     }
+    $page = $_POST[ACCESS_PAGE] ?? null;
+    if (is_string($page)) {
+        $page = filter_var(trim($page) === '' ? '0' : wp_unslash($page), FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+        if ($page === false || ($page && (!$product->is_type('simple') || !$product->is_virtual() || $product->is_downloadable()
+            || !current_user_can('edit_post', $page) || !private_access_page($page)))) {
+            \WC_Admin_Meta_Boxes::add_error('Select an editable private WordPress page for a simple virtual product without a native download.');
+        } elseif ($page === 0) {
+            $product->delete_meta_data(ACCESS_PAGE);
+        } else {
+            $product->update_meta_data(ACCESS_PAGE, $page);
+        }
+    }
     foreach (array_keys(ProductFiles::DEFAULTS) as $kind) {
         $key = '_blocksign_esign_' . $kind . '_file';
         if (!isset($_POST[$key]) || !is_string($_POST[$key])) {
@@ -231,6 +253,13 @@ add_action('woocommerce_admin_process_product_object', static function (WC_Produ
         }
     }
 });
+
+function private_access_page(int $id): ?\WP_Post
+{
+    $page = get_post($id);
+    return $page instanceof \WP_Post && $page->post_type === 'page' && $page->post_status === 'private' && $page->post_password === ''
+        ? $page : null;
+}
 
 function asset(string $name): string
 {
@@ -259,6 +288,9 @@ function snapshot(WC_Order $order, bool $preview = false): void
     $total = (float) $order->get_total();
 
     if ($existing) {
+        if (!empty($existing['access_pages']) && (int) $order->get_customer_id() !== $existing['access_customer_id']) {
+            throw new RuntimeException('The customer account for the BlockSign access product cannot be changed.');
+        }
         $previousCart = $existing['cart'] ?? [[(int) $existing['product_id'], 0, 1]];
         if ($previousCart !== $cart) {
             throw new RuntimeException('The protected order items cannot be changed.');
@@ -287,12 +319,25 @@ function snapshot(WC_Order $order, bool $preview = false): void
     $configuredProduct = configured_product();
     $products = [];
     $shipping = [];
+    $access = [];
     foreach ($items as $item) {
         $id = (int) $item->get_product_id();
         $product = $item->get_product();
         if ($product instanceof WC_Product && $product->is_type('simple') && !$product->is_virtual()
             && !$product->is_downloadable() && $product->get_meta(SHIPPING_FLAG) === 'yes') {
             $shipping[$id] = true;
+            $products[$id] = $product;
+            continue;
+        }
+        $page = $product instanceof WC_Product ? (int) $product->get_meta(ACCESS_PAGE) : 0;
+        if ($page > 0) {
+            if (!$product->is_type('simple') || !$product->is_virtual() || $product->is_downloadable() || !private_access_page($page)) {
+                throw new RuntimeException('A BlockSign access product is unavailable. Contact the shop.');
+            }
+            if (!(int) $order->get_customer_id()) {
+                throw new RuntimeException('Sign in to a customer account before ordering a BlockSign access product.');
+            }
+            $access[$id] = $page;
             $products[$id] = $product;
             continue;
         }
@@ -338,7 +383,7 @@ function snapshot(WC_Order $order, bool $preview = false): void
             $placement,
             CategoryDocuments::forProduct($additional, $categoryDocuments, $categoryDocuments ? $product->get_category_ids() : []),
             asset(...),
-            !isset($shipping[$id])
+            !isset($shipping[$id]) && !isset($access[$id])
         );
     }
     $state = OrderFiles::combine($products) + [
@@ -348,6 +393,10 @@ function snapshot(WC_Order $order, bool $preview = false): void
     ];
     if ($shipping) {
         $state['hold_shipping'] = true;
+    }
+    if ($access) {
+        $state['access_pages'] = $access;
+        $state['access_customer_id'] = (int) $order->get_customer_id();
     }
     if ($timing === 'before_order' && !$preview) {
         $state = consume_preorder($state, $total);
@@ -428,6 +477,7 @@ add_action('woocommerce_after_checkout_validation', static function (array $data
         // Build an unsaved order from the validated cart. No order or payment is created here.
         $draft = new WC_Order();
         $draft->set_billing_email($data['billing_email'] ?? '');
+        $draft->set_customer_id(get_current_user_id());
         $draft->set_payment_method($data['payment_method'] ?? '');
         $total = (float) WC()->cart->get_total('edit');
         $draft->set_total($total);
@@ -492,7 +542,18 @@ add_action(PREORDER_JOB, static function (string $key): void {
 
 add_action('woocommerce_checkout_create_order', __NAMESPACE__ . '\\snapshot');
 add_action('woocommerce_store_api_checkout_update_order_from_request', static function (WC_Order $order, \WP_REST_Request $request): void {
-    if ($request->get_method() !== 'POST' || paid_timing() !== 'before_order' || $order->get_meta(META)) {
+    if ($request->get_method() !== 'POST') {
+        return;
+    }
+    if (!(int) $order->get_customer_id()) {
+        foreach ($order->get_items() as $item) {
+            $product = $item->get_product();
+            if ($product instanceof WC_Product && (int) $product->get_meta(ACCESS_PAGE) > 0) {
+                throw new RouteException('blocksign_access_account', 'Sign in to a customer account before ordering a BlockSign access product.', 400);
+            }
+        }
+    }
+    if (paid_timing() !== 'before_order' || $order->get_meta(META)) {
         return;
     }
     try {
@@ -837,6 +898,17 @@ function show_order_state(WC_Order $order): void
     if (!empty($state['hold_shipping'])) {
         echo '<p>BlockSign: all required confirmations are complete.</p>';
     }
+    foreach ($state['access_pages'] ?? [] as $product => $pageId) {
+        $page = entitled_page($order, $state, (int) $product, get_current_user_id());
+        if ($page) {
+            $url = add_query_arg([
+                'action' => 'blocksign_esign_access',
+                'order' => $order->get_id(),
+                'product' => $product,
+            ], admin_url('admin-post.php'));
+            printf('<p><a href="%s">Open %s</a></p>', esc_url($url), esc_html($page->post_title));
+        }
+    }
     foreach (OrderFiles::downloads($state) as $product => $file) {
         $url = add_query_arg([
             'action' => 'blocksign_esign_download',
@@ -860,6 +932,54 @@ add_action('woocommerce_thankyou', static function (int $orderId): void {
     }
 
 });
+
+function entitled_page(WC_Order $order, array $state, int $product, int $userId): ?\WP_Post
+{
+    $pageId = (int) ($state['access_pages'][$product] ?? 0);
+    if (!$pageId || $userId < 1 || $userId !== ($state['access_customer_id'] ?? 0)
+        || $userId !== (int) $order->get_customer_id() || (float) $order->get_total_refunded() > 0
+        || !download_allowed($order, $state)) {
+        return null;
+    }
+
+    foreach ($order->get_items() as $item) {
+        if ((int) $item->get_product_id() === $product && (int) $item->get_quantity() > 0) {
+            return private_access_page($pageId);
+        }
+    }
+    return null;
+}
+
+function open_access_page(): void
+{
+    nocache_headers();
+    $id = filter_var($_GET['order'] ?? 0, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+    $product = filter_var($_GET['product'] ?? 0, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+    $userId = get_current_user_id();
+    $order = $id && $userId ? wc_get_order($id) : null;
+    $page = $order instanceof WC_Order && $product
+        ? entitled_page($order, (array) $order->get_meta(META), $product, $userId) : null;
+    if (!$page) {
+        wp_die('Access unavailable.', '', ['response' => 404]);
+    }
+
+    header('Cache-Control: private, no-store, max-age=0');
+    header('Content-Type: text/html; charset=UTF-8');
+    header('X-Robots-Tag: noindex, nofollow');
+    header('X-Content-Type-Options: nosniff');
+    header('Referrer-Policy: no-referrer');
+    header('X-Frame-Options: DENY');
+    printf('<!doctype html><html lang="%s"><meta charset="utf-8"><title>%s</title><main><h1>%s</h1>%s</main></html>',
+        esc_attr(get_bloginfo('language')),
+        esc_html($page->post_title),
+        esc_html($page->post_title),
+        wp_kses_post(wpautop($page->post_content))
+    );
+    exit;
+}
+
+add_action('admin_post_blocksign_esign_access', __NAMESPACE__ . '\open_access_page');
+add_action('admin_post_nopriv_blocksign_esign_access', __NAMESPACE__ . '\open_access_page');
 
 function download(): void
 {

@@ -31,6 +31,7 @@ class WC_Order
     public float $refunded = 0;
     public bool $paid = false;
     public string $status = 'pending';
+    public int $customerId = 0;
     public array $changes = [];
     public ?int $completedAt = null;
     public string $email = 'customer@example.com';
@@ -55,6 +56,8 @@ class WC_Order
     }
     public function get_payment_method(): string { return $this->method; }
     public function get_id(): int { return 42; }
+    public function set_customer_id(int $id): void { $this->customerId = $id; }
+    public function get_customer_id(): int { return $this->customerId; }
     public function needs_payment(): bool { return $this->total > 0 && !$this->paid; }
     public function get_billing_email(): string { return $this->email; }
     public function get_checkout_order_received_url(): string { return 'https://shop.example/received/42'; }
@@ -102,8 +105,8 @@ class WC_Product
     public function is_virtual(): bool { return $this->virtual; }
     public static bool $downloadable = false;
     public static array $metadata = [];
-    public function get_meta(string $key): string { return self::$metadata[$key] ?? ''; }
-    public function update_meta_data(string $key, string $value): void { self::$metadata[$key] = $value; }
+    public function get_meta(string $key): string|int { return self::$metadata[$key] ?? ''; }
+    public function update_meta_data(string $key, string|int $value): void { self::$metadata[$key] = $value; }
     public function delete_meta_data(string $key): void { unset(self::$metadata[$key]); }
     public function is_downloadable(): bool { return self::$downloadable; }
     public function get_category_ids(): array { return [21]; }
@@ -259,6 +262,28 @@ function get_option(string $name, mixed $default = false): mixed
 }
 
 function wc_maybe_reduce_stock_levels(int $id): void { $GLOBALS['stock_reduced_for'] = $id; }
+class WP_Post
+{
+    public string $post_type = 'page';
+    public string $post_status = 'private';
+    public string $post_password = '';
+    public string $post_title = 'Member area';
+    public string $post_content = 'Member content';
+}
+
+class WC_Admin_Meta_Boxes
+{
+    public static function add_error(string $error): void { $GLOBALS['product_errors'][] = $error; }
+}
+
+function get_post(int $id): ?WP_Post { return $GLOBALS['pages'][$id] ?? null; }
+function get_current_user_id(): int { return $GLOBALS['user_id'] ?? 0; }
+function current_user_can(string $capability, int $id): bool
+{
+    return $capability === 'edit_post' && in_array($id, $GLOBALS['editable_pages'] ?? [], true);
+}
+function nocache_headers(): void {}
+
 function wp_unslash(string $value): string { return stripslashes($value); }
 function absint(int $value): int { return abs($value); }
 function is_email(string $value): bool { return filter_var($value, FILTER_VALIDATE_EMAIL) !== false; }
@@ -682,3 +707,61 @@ $order->refunded = 0;
 check($order->status === 'processing', 'confirmed paid order was not released for shipping');
 check($paymentStatus('processing', 42, $order) === 'processing', 'signed order was sent back to hold');
 echo "PASS WooCommerce physical order hold, stock and shipping release\n";
+
+$configured_timing = 'after_payment';
+$configured_scope = ['mode' => 'product', 'category_id' => 0];
+$category_documents = '';
+WC_Product::$metadata = [];
+$pages = [25 => new WP_Post(), 26 => new WP_Post()];
+$editable_pages = [25];
+$product_errors = [];
+$_POST['_blocksign_esign_access_page'] = '26';
+$hooks['woocommerce_admin_process_product_object'](new WC_Product());
+check($product_errors && empty(WC_Product::$metadata['_blocksign_esign_access_page']), 'editor assigned a private page they could not edit');
+$_POST['_blocksign_esign_access_page'] = '25';
+$hooks['woocommerce_admin_process_product_object'](new WC_Product());
+unset($_POST['_blocksign_esign_access_page']);
+
+$order = new WC_Order();
+$order->items = [new WC_Order_Item(15)];
+$order->total = 25;
+try {
+    $hooks['woocommerce_store_api_checkout_update_order_from_request']($order, new WP_REST_Request('POST', '/wc/store/v1/checkout'));
+    check(false, 'guest reached gateway for a BlockSign access product');
+} catch (RouteError $error) {
+    check($error->error === 'blocksign_access_account', 'unexpected guest checkout error');
+}
+try {
+    $hooks['woocommerce_checkout_create_order']($order);
+    check(false, 'classic checkout accepted access purchase without account');
+} catch (RuntimeException $error) {
+    check(str_contains($error->getMessage(), 'Sign in'), 'unexpected account requirement error');
+}
+$order->customerId = 81;
+$hooks['woocommerce_checkout_create_order']($order);
+check($order->state['access_pages'] === [15 => 25] && $order->state['downloads'] === [], 'access product did not pin its own page');
+$entitled = static fn (int $user): ?WP_Post => \BlockSign\WooCommerce\entitled_page($order, $order->state, 15, $user);
+check($entitled(81) === null, 'unpaid and unsigned order granted access');
+$order->paid = true;
+$order->paidAt = new DateTimeImmutable();
+check($entitled(81) === null, 'payment alone granted access');
+$order->state['documents'][0]['completed'] = true;
+check($entitled(81) === $pages[25] && $entitled(82) === null, 'access was not limited to the buyer');
+check(\BlockSign\WooCommerce\entitled_page($order, $order->state, 16, 81) === null, 'an unrelated product opened the page');
+
+$user_id = 82;
+$_GET['order'] = '42';
+$_GET['product'] = '15';
+try {
+    $hooks['admin_post_blocksign_esign_access']();
+    check(false, 'private endpoint returned content for another account');
+} catch (CheckoutInterrupted $response) {
+    check($response->payload['status'] === 404, 'wrong account should receive a generic response');
+}
+unset($_GET['order'], $_GET['product'], $user_id);
+$order->refunded = 1;
+check($entitled(81) === null, 'refunded order retained access');
+$order->refunded = 0;
+$pages[25]->post_status = 'publish';
+check($entitled(81) === null, 'an altered page must not be served by the protected endpoint');
+echo "PASS WooCommerce private customer access and revocation\n";
