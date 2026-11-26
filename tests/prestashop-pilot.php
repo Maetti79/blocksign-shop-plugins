@@ -25,15 +25,41 @@ register_shutdown_function(static function () use ($files): void {
 #[AllowDynamicProperties]
 class Module
 {
+    public object $context;
+    public array $hooks = [];
+
     public function __construct()
     {
+        $this->context = (object) ['shop' => (object) ['id' => 2]];
     }
+
+    public function registerHook(array $hooks): bool
+    {
+        $this->hooks = $hooks;
+        return true;
+    }
+}
+
+class Shop
+{
+    public static function isFeatureActive(): bool { return false; }
 }
 
 class Configuration
 {
+    public static array $productFlags = [];
+
+    public static function updateValue(string $key, int $value, bool $html, ?int $group, int $shop): bool
+    {
+        self::$productFlags[$shop][$key] = $value;
+        return true;
+    }
+
     public static function get(string $key, ...$context): int|string
     {
+        if (str_starts_with($key, 'BLOCKSIGN_ESIGN_PRODUCT_FLAG_')) {
+            return self::$productFlags[$context[2]][$key] ?? 0;
+        }
         return match ($key) {
             'BLOCKSIGN_ESIGN_PRODUCT' => 99,
             'BLOCKSIGN_ESIGN_SCOPE' => $GLOBALS['configured_scope'] ?? '',
@@ -245,3 +271,33 @@ ProductDownload::$active = false;
 $module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
 check((json_decode(Db::$row['state'], true)['product_id'] ?? 0) === 99, 'catalog-wide scope did not select eligible product');
 echo "PASS PrestaShop product scopes\n";
+
+require ($argv[1] ?? 'build/blocksignesign') . '/upgrade/upgrade-0.6.0.php';
+check(upgrade_module_0_6_0($module), 'product hooks could not be installed during upgrade');
+check($module->hooks === ['actionProductFormBuilderModifier', 'actionAfterUpdateProductFormHandler'], 'upgrade omitted product form hooks');
+$configured_scope = '{"mode":"flagged","category_id":0}';
+Db::$row = [];
+$module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
+check(Db::$row === [], 'unmarked product was selected');
+
+$module->hookActionAfterUpdateProductFormHandler([
+    'id' => 99, 'form_data' => ['options' => ['blocksign_esign_required' => true]],
+]);
+$builder = new class {
+    public array $checkbox = [];
+    public function has(string $name): bool { return $name === 'options'; }
+    public function get(string $name): self { return $this; }
+    public function add(string $name, string $type, array $options): void { $this->checkbox[$name] = $options; }
+};
+$module->hookActionProductFormBuilderModifier(['id' => 99, 'form_builder' => $builder, 'options' => ['shop_id' => 2]]);
+check($builder->checkbox['blocksign_esign_required']['data'] === true, 'checkbox did not load the saved flag');
+$module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
+check((json_decode(Db::$row['state'], true)['product_id'] ?? 0) === 99, 'saved product checkbox did not select the product');
+
+$module->hookActionAfterUpdateProductFormHandler([
+    'id' => 99, 'form_data' => ['options' => ['blocksign_esign_required' => false]],
+]);
+Db::$row = [];
+$module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
+check(Db::$row === [], 'unchecked product was still selected');
+echo "PASS PrestaShop product checkbox and upgrade\n";

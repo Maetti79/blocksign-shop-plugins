@@ -21,6 +21,7 @@ Unter **Protected products** wählst du für welche Produkte die Einstellung gil
 
 - **Single product** verwendet die bestehende Produkt-ID. Diese Auswahl gilt beim Update automatisch weiter. Mit Produkt-ID 0 werden in diesem Modus keine neuen Vorgänge angelegt.
 - **Product category** verwendet die eingegebene Kategorie-ID. Berechtigt sind geeignete virtuelle Produkte, die direkt dieser Kategorie zugeordnet sind.
+- **Products marked on their edit screen** verwendet die Checkbox **Require BlockSign eSign** unter **Produktdaten → Allgemein** des klassischen WooCommerce-Produkteditors.
 - **All eligible virtual products** gilt für geeignete virtuelle Produkte im ganzen Shop. Produkte mit einem aktiven eigenen Shop-Download bleiben außerhalb dieser Auswahl.
 
 Alle erfassten Produkte verwenden dieselben Pflichtdokumente, dasselbe private `download.pdf` und denselben Zahlungsablauf der Modulkonfiguration. Eine Bestellung umfasst im Pilot genau ein Exemplar eines geschützten Produkts. Änderungen der Zuordnung gelten für neue Bestellungen.

@@ -7,6 +7,7 @@ use BlockSign\ESign\ProductScope;
 use BlockSign\ESign\RequiredSignatures;
 use BlockSign\ESign\SignatureSettings;
 use BlockSign\ESign\SignatureWorkflow;
+use Symfony\Component\Form\Extension\Core\Type\CheckboxType;
 
 if (!defined('_PS_VERSION_')) {
     exit;
@@ -24,13 +25,15 @@ class BlocksignEsign extends Module
 {
     private const PRODUCT = 'BLOCKSIGN_ESIGN_PRODUCT';
     private const SCOPE = 'BLOCKSIGN_ESIGN_SCOPE';
+    private const PRODUCT_FLAG = 'blocksign_esign_required';
+    private const PRODUCT_FLAG_PREFIX = 'BLOCKSIGN_ESIGN_PRODUCT_FLAG_';
     private const SIGNATURE = 'BLOCKSIGN_ESIGN_SIGNATURE';
     private const DOCUMENTS = 'BLOCKSIGN_ESIGN_DOCUMENTS';
 
     public function __construct()
     {
         $this->name = 'blocksignesign';
-        $this->version = '0.5.0';
+        $this->version = '0.6.0';
         $this->author = 'BlockSign';
         $this->tab = 'administration';
         $this->ps_versions_compliancy = ['min' => '9.0.0', 'max' => _PS_VERSION_];
@@ -53,7 +56,58 @@ class BlocksignEsign extends Module
                     INDEX pending (next_attempt)
                 ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8mb4'
             )
-            && $this->registerHook(['actionValidateOrderAfter', 'displayOrderConfirmation', 'displayOrderDetail']);
+            && $this->registerHook(['actionValidateOrderAfter', 'displayOrderConfirmation', 'displayOrderDetail'])
+            && $this->registerProductHooks();
+    }
+
+    public function registerProductHooks(): bool
+    {
+        return $this->registerHook(['actionProductFormBuilderModifier', 'actionAfterUpdateProductFormHandler']);
+    }
+
+    public function hookActionProductFormBuilderModifier(array $params): void
+    {
+        $productId = (int) ($params['id'] ?? 0);
+        $shopId = $this->productEditorShop();
+        $builder = $params['form_builder'];
+        if (!$productId || !$shopId || !$builder->has('options')
+            || (int) ($params['options']['shop_id'] ?? $shopId) !== $shopId) {
+            return;
+        }
+
+        $builder->get('options')->add(self::PRODUCT_FLAG, CheckboxType::class, [
+            'label' => 'Require BlockSign eSign',
+            'help' => 'Applies when BlockSign is configured to use marked products.',
+            'required' => false,
+            'data' => self::productMarked($productId, $shopId),
+        ]);
+    }
+
+    public function hookActionAfterUpdateProductFormHandler(array $params): void
+    {
+        $productId = (int) ($params['id'] ?? 0);
+        $shopId = $this->productEditorShop();
+        $flag = $params['form_data']['options'][self::PRODUCT_FLAG] ?? null;
+        if (!$productId || !$shopId || !is_bool($flag)) {
+            return;
+        }
+
+        if (!Configuration::updateValue(self::PRODUCT_FLAG_PREFIX . $productId, (int) $flag, false, null, $shopId)) {
+            throw new RuntimeException('Could not save the BlockSign product checkbox.');
+        }
+    }
+
+    private function productEditorShop(): int
+    {
+        if (Shop::isFeatureActive()) {
+            return (int) Shop::getContextShopID();
+        }
+        return (int) $this->context->shop->id;
+    }
+
+    private static function productMarked(int $productId, int $shopId): bool
+    {
+        return (bool) Configuration::get(self::PRODUCT_FLAG_PREFIX . $productId, null, null, $shopId);
     }
 
     public function getContent()
@@ -118,6 +172,7 @@ class BlocksignEsign extends Module
                 'options' => ['query' => [
                     ['id' => 'product', 'name' => 'Single product'],
                     ['id' => 'category', 'name' => 'Product category'],
+                    ['id' => 'flagged', 'name' => 'Products marked on their edit screen'],
                     ['id' => 'all', 'name' => 'All eligible virtual products'],
                 ], 'id' => 'id', 'name' => 'name'],
             ], [
@@ -191,9 +246,10 @@ class BlocksignEsign extends Module
 
             $product = new Product($productId, false, null, $shopId);
             $categories = $scope['mode'] === 'category' ? $product->getCategories() : [];
+            $flagged = $scope['mode'] === 'flagged' && self::productMarked($productId, $shopId);
             $customer = $params['customer'];
             if (!$product->is_virtual || (int) ($item['product_attribute_id'] ?? 0) !== 0
-                || !ProductScope::matches($scope, $configuredProduct, $productId, $categories)
+                || !ProductScope::matches($scope, $configuredProduct, $productId, $categories, $flagged)
                 || ProductDownload::getIdFromIdProduct($productId) || $product->getAttachments((int) $order->id_lang)
                 || (int) $customer->id !== (int) $order->id_customer || !Validate::isEmail($customer->email)) {
                 continue;

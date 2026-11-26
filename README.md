@@ -13,7 +13,7 @@ GitHub Actions baut die Installationspakete. [Workflow und ZIP-Artefakte](https:
 
 ## Gemeinsame Funktionen
 
-- **Produktzuordnung** für ein einzelnes Produkt, eine Kategorie oder alle geeigneten virtuellen Produkte.
+- **Produktzuordnung** für ein einzelnes Produkt, markierte Produkte, eine Kategorie oder alle geeigneten virtuellen Produkte.
 - **Ein oder mehrere Pflichtdokumente** mit EES, FES oder QES sowie PDF-Seite und X/Y-Position je Dokument.
 - **Private Ablage von Nachweisen** für signierte PDFs und Audit-Trails.
 - **Geschützter Download** mit einer Freigabeprüfung anhand des Bestell-, Zahlungs- und Signaturstatus.

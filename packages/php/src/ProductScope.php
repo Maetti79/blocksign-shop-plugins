@@ -14,18 +14,19 @@ final class ProductScope
     {
         $mode = $input['mode'] ?? '';
         $categoryId = filter_var($input['category_id'] ?? 0, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
-        if (!in_array($mode, ['product', 'category', 'all'], true) || $categoryId === false || ($mode === 'category' && $categoryId === 0)) {
+        if (!in_array($mode, ['product', 'category', 'all', 'flagged'], true) || $categoryId === false || ($mode === 'category' && $categoryId === 0)) {
             throw new InvalidArgumentException('Select a product scope and enter a positive category ID for category scope.');
         }
         return ['mode' => $mode, 'category_id' => $categoryId];
     }
 
-    public static function matches(array $scope, int $configuredProduct, int $product, array $categories = []): bool
+    public static function matches(array $scope, int $configuredProduct, int $product, array $categories = [], bool $flagged = false): bool
     {
         return match ($scope['mode']) {
             'product' => $configuredProduct > 0 && $product === $configuredProduct,
             'category' => in_array($scope['category_id'], array_map('intval', $categories), true),
             'all' => true,
+            'flagged' => $flagged,
             default => false,
         };
     }

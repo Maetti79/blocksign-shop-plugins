@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BlockSign eSign for WooCommerce
  * Description: Release a free virtual product after BlockSign confirms its signature.
- * Version: 0.6.0
+ * Version: 0.7.0
  * Requires PHP: 8.1
  * Requires Plugins: woocommerce
  * License: GPL-3.0-or-later
@@ -40,6 +40,7 @@ require_once __DIR__ . '/core/EvidenceArchive.php';
 const META = '_blocksign_esign';
 const JOB = 'blocksign_esign_check';
 const GROUP = 'blocksign-esign';
+const PRODUCT_FLAG = '_blocksign_esign_required';
 
 function configured_product(): int
 {
@@ -117,7 +118,7 @@ add_action('admin_menu', static function (): void {
         settings_fields('blocksign_esign');
         $scope = product_scope();
         echo '<p><label for="blocksign-scope">Protected products</label> <select id="blocksign-scope" name="blocksign_esign_scope[mode]">';
-        foreach (['product' => 'Single product', 'category' => 'Product category', 'all' => 'All eligible virtual products'] as $value => $label) {
+        foreach (['product' => 'Single product', 'category' => 'Product category', 'flagged' => 'Products marked on their edit screen', 'all' => 'All eligible virtual products'] as $value => $label) {
             printf('<option value="%s"%s>%s</option>', esc_attr($value), selected($scope['mode'], $value, false), esc_html($label));
         }
         echo '</select></p>';
@@ -140,6 +141,31 @@ add_action('admin_menu', static function (): void {
         submit_button();
         echo '</form></div>';
     });
+});
+
+add_action('woocommerce_product_options_general_product_data', static function (): void {
+    global $product_object;
+    if (!$product_object instanceof WC_Product) {
+        return;
+    }
+    // Distinguish an unchecked field from an update made outside the full product editor.
+    printf('<input type="hidden" name="%s" value="no">', esc_attr(PRODUCT_FLAG));
+    woocommerce_wp_checkbox([
+        'id' => PRODUCT_FLAG,
+        'label' => 'Require BlockSign eSign',
+        'description' => 'Applies when BlockSign is configured to use marked products.',
+        'value' => $product_object->get_meta(PRODUCT_FLAG) === 'yes' ? 'yes' : 'no',
+        'wrapper_class' => 'show_if_simple',
+    ]);
+});
+
+add_action('woocommerce_admin_process_product_object', static function (WC_Product $product): void {
+    $value = $_POST[PRODUCT_FLAG] ?? null;
+    if ($value === 'yes') {
+        $product->update_meta_data(PRODUCT_FLAG, 'yes');
+    } elseif ($value === 'no') {
+        $product->delete_meta_data(PRODUCT_FLAG);
+    }
 });
 
 function asset(string $name): string
@@ -172,8 +198,9 @@ function snapshot(WC_Order $order): void
         $eligible = $product instanceof WC_Product && $product->is_type('simple')
             && $product->is_virtual() && !$product->is_downloadable();
         $categories = $scope['mode'] === 'category' && $eligible ? $product->get_category_ids() : [];
+        $flagged = $scope['mode'] === 'flagged' && $eligible && $product->get_meta(PRODUCT_FLAG) === 'yes';
         if ($scope['mode'] !== 'product'
-            && (!$eligible || !ProductScope::matches($scope, $configuredProduct, $productId, $categories))) {
+            && (!$eligible || !ProductScope::matches($scope, $configuredProduct, $productId, $categories, $flagged))) {
             continue;
         }
 

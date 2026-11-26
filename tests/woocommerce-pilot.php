@@ -66,6 +66,10 @@ class WC_Product
     public function is_type(string $type): bool { return $type === 'simple'; }
     public function is_virtual(): bool { return true; }
     public static bool $downloadable = false;
+    public static array $metadata = [];
+    public function get_meta(string $key): string { return self::$metadata[$key] ?? ''; }
+    public function update_meta_data(string $key, string $value): void { self::$metadata[$key] = $value; }
+    public function delete_meta_data(string $key): void { unset(self::$metadata[$key]); }
     public function is_downloadable(): bool { return self::$downloadable; }
     public function get_category_ids(): array { return [21]; }
 }
@@ -323,3 +327,27 @@ WC_Product::$downloadable = false;
 $hooks['woocommerce_checkout_create_order']($order);
 check(($order->state['product_id'] ?? 0) === 7, 'catalog-wide scope did not select eligible product');
 echo "PASS WooCommerce product scopes\n";
+
+$configured_scope = ['mode' => 'flagged', 'category_id' => 0];
+$product = new WC_Product();
+$order = new WC_Order([]);
+$hooks['woocommerce_checkout_create_order']($order);
+check($order->state === [], 'unmarked product was selected');
+
+$_POST['_blocksign_esign_required'] = 'yes';
+$hooks['woocommerce_admin_process_product_object']($product);
+unset($_POST['_blocksign_esign_required']);
+$hooks['woocommerce_admin_process_product_object']($product);
+$hooks['woocommerce_checkout_create_order']($order);
+check(($order->state['product_id'] ?? 0) === 7, 'saved product checkbox did not select the product');
+$existing = $order->state;
+
+$_POST['_blocksign_esign_required'] = 'no';
+$hooks['woocommerce_admin_process_product_object']($product);
+unset($_POST['_blocksign_esign_required']);
+$hooks['woocommerce_checkout_create_order']($order);
+check($order->state === $existing, 'unchecking changed an existing order');
+$order = new WC_Order([]);
+$hooks['woocommerce_checkout_create_order']($order);
+check($order->state === [], 'unchecked product was still selected');
+echo "PASS WooCommerce product checkbox\n";
