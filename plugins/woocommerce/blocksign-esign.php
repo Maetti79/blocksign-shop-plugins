@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BlockSign eSign for WooCommerce
  * Description: Release a free virtual product after BlockSign confirms its signature.
- * Version: 0.4.0
+ * Version: 0.5.0
  * Requires PHP: 8.1
  * Requires Plugins: woocommerce
  * License: GPL-3.0-or-later
@@ -14,6 +14,7 @@ namespace BlockSign\WooCommerce;
 
 use BlockSign\ESign\Client;
 use BlockSign\ESign\Gate;
+use BlockSign\ESign\ProductScope;
 use BlockSign\ESign\RequiredSignatures;
 use BlockSign\ESign\SignatureSettings;
 use BlockSign\ESign\SignatureWorkflow;
@@ -32,6 +33,7 @@ require_once __DIR__ . '/core/Client.php';
 require_once __DIR__ . '/core/SignatureSettings.php';
 require_once __DIR__ . '/core/SignatureWorkflow.php';
 require_once __DIR__ . '/core/RequiredSignatures.php';
+require_once __DIR__ . '/core/ProductScope.php';
 
 const META = '_blocksign_esign';
 const JOB = 'blocksign_esign_check';
@@ -40,6 +42,11 @@ const GROUP = 'blocksign-esign';
 function configured_product(): int
 {
     return absint(get_option('blocksign_esign_product', 0));
+}
+
+function product_scope(): array
+{
+    return ProductScope::validate(get_option('blocksign_esign_scope', ProductScope::DEFAULTS));
 }
 
 function paid_timing(): string
@@ -79,6 +86,17 @@ add_action('admin_init', static function (): void {
             }
         },
     ]);
+    register_setting('blocksign_esign', 'blocksign_esign_scope', [
+        'type' => 'array',
+        'sanitize_callback' => static function ($value): array {
+            try {
+                return ProductScope::validate((array) $value);
+            } catch (InvalidArgumentException $error) {
+                add_settings_error('blocksign_esign_scope', 'invalid_scope', $error->getMessage());
+                return product_scope();
+            }
+        },
+    ]);
     register_setting('blocksign_esign', 'blocksign_esign_paid_timing', [
         'type' => 'string',
         'sanitize_callback' => static fn ($value): string => $value === 'before_payment' ? 'before_payment' : 'after_payment',
@@ -95,6 +113,13 @@ add_action('admin_menu', static function (): void {
         settings_errors();
         echo '<form action="options.php" method="post">';
         settings_fields('blocksign_esign');
+        $scope = product_scope();
+        echo '<p><label for="blocksign-scope">Protected products</label> <select id="blocksign-scope" name="blocksign_esign_scope[mode]">';
+        foreach (['product' => 'Single product', 'category' => 'Product category', 'all' => 'All eligible virtual products'] as $value => $label) {
+            printf('<option value="%s"%s>%s</option>', esc_attr($value), selected($scope['mode'], $value, false), esc_html($label));
+        }
+        echo '</select></p>';
+        printf('<p><label for="blocksign-category">Category ID (category scope)</label> <input id="blocksign-category" type="number" min="0" name="blocksign_esign_scope[category_id]" value="%d" required></p>', $scope['category_id']);
         printf('<label for="blocksign_esign_product">Protected product ID</label> <input id="blocksign_esign_product" type="number" min="0" name="blocksign_esign_product" value="%d">', configured_product());
         printf('<p><label for="blocksign-paid-timing">Signature timing for paid orders</label> <select id="blocksign-paid-timing" name="blocksign_esign_paid_timing"><option value="after_payment"%s>After payment</option><option value="before_payment"%s>Before payment (classic checkout)</option></select></p>',
             selected(paid_timing(), 'after_payment', false), selected(paid_timing(), 'before_payment', false));
@@ -133,16 +158,24 @@ function asset(string $name): string
 function snapshot(WC_Order $order): void
 {
     $existing = $order->get_meta(META);
-    $productId = $existing['product_id'] ?? configured_product();
+    $scope = $existing ? ProductScope::DEFAULTS : product_scope();
+    $configuredProduct = $existing['product_id'] ?? configured_product();
     $items = $order->get_items();
     foreach ($items as $item) {
-        if (!$productId || $item->get_product_id() !== $productId) {
+        $productId = $item->get_product_id();
+        if ($scope['mode'] === 'product' && !ProductScope::matches($scope, $configuredProduct, $productId)) {
+            continue;
+        }
+        $product = $item->get_product();
+        $eligible = $product instanceof WC_Product && $product->is_type('simple')
+            && $product->is_virtual() && !$product->is_downloadable();
+        $categories = $scope['mode'] === 'category' && $eligible ? $product->get_category_ids() : [];
+        if ($scope['mode'] !== 'product'
+            && (!$eligible || !ProductScope::matches($scope, $configuredProduct, $productId, $categories))) {
             continue;
         }
 
-        $product = $item->get_product();
-        if (!$product instanceof WC_Product || !$product->is_type('simple') || !$product->is_virtual()
-            || $product->is_downloadable() || count($items) !== 1 || $item->get_quantity() !== 1
+        if (!$eligible || count($items) !== 1 || $item->get_quantity() !== 1
             || (float) $order->get_total() < 0.0 || !is_email($order->get_billing_email())) {
             throw new RuntimeException('The protected product must be ordered alone as a virtual item with a valid email address.');
         }

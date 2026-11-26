@@ -36,6 +36,7 @@ class Configuration
     {
         return match ($key) {
             'BLOCKSIGN_ESIGN_PRODUCT' => 99,
+            'BLOCKSIGN_ESIGN_SCOPE' => $GLOBALS['configured_scope'] ?? '',
             'BLOCKSIGN_ESIGN_DOCUMENTS' => 'mandate.pdf | FES | 3 | 25 | 40',
             'BLOCKSIGN_ESIGN_SIGNATURE' => '{"signature_level":"qes","page":2,"x":12.5,"y":0}',
             'PS_OS_CANCELED' => 6,
@@ -48,6 +49,7 @@ class Configuration
 class Order
 {
     public int $id_shop = 2;
+    public int $id_lang = 1;
     public int $id_customer = 81;
     public static bool $paid = false;
     public static bool $paidOrder = false;
@@ -78,6 +80,19 @@ class Order
 class Product
 {
     public bool $is_virtual = true;
+
+    public function getCategories(): array { return ['21']; }
+    public function getAttachments(int $language): array { return []; }
+}
+
+class ProductDownload
+{
+    public static bool $active = false;
+
+    public static function getIdFromIdProduct(int $id): int
+    {
+        return self::$active ? 1 : 0;
+    }
 }
 
 class Validate
@@ -210,3 +225,23 @@ Order::$paid = true;
 $order->current_state = 6;
 check(!BlocksignEsign::downloadAllowed($order, $state), 'cancelled order remained eligible');
 echo "PASS PrestaShop pilot with mocked BlockSign API\n";
+
+Db::$row = [];
+$configured_scope = '{"mode":"category","category_id":22}';
+$order = new Order(42);
+$module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
+check(Db::$row === [], 'unrelated category matched');
+
+$configured_scope = '{"mode":"category","category_id":21}';
+$module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
+check((json_decode(Db::$row['state'], true)['product_id'] ?? 0) === 99, 'configured category did not match');
+
+Db::$row = [];
+$configured_scope = '{"mode":"all","category_id":0}';
+ProductDownload::$active = true;
+$module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
+check(Db::$row === [], 'catalog-wide scope selected a native download');
+ProductDownload::$active = false;
+$module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
+check((json_decode(Db::$row['state'], true)['product_id'] ?? 0) === 99, 'catalog-wide scope did not select eligible product');
+echo "PASS PrestaShop product scopes\n";

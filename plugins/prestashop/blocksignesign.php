@@ -2,6 +2,7 @@
 
 use BlockSign\ESign\Client;
 use BlockSign\ESign\Gate;
+use BlockSign\ESign\ProductScope;
 use BlockSign\ESign\RequiredSignatures;
 use BlockSign\ESign\SignatureSettings;
 use BlockSign\ESign\SignatureWorkflow;
@@ -15,17 +16,19 @@ require_once __DIR__ . '/core/Gate.php';
 require_once __DIR__ . '/core/SignatureSettings.php';
 require_once __DIR__ . '/core/SignatureWorkflow.php';
 require_once __DIR__ . '/core/RequiredSignatures.php';
+require_once __DIR__ . '/core/ProductScope.php';
 
 class BlocksignEsign extends Module
 {
     private const PRODUCT = 'BLOCKSIGN_ESIGN_PRODUCT';
+    private const SCOPE = 'BLOCKSIGN_ESIGN_SCOPE';
     private const SIGNATURE = 'BLOCKSIGN_ESIGN_SIGNATURE';
     private const DOCUMENTS = 'BLOCKSIGN_ESIGN_DOCUMENTS';
 
     public function __construct()
     {
         $this->name = 'blocksignesign';
-        $this->version = '0.3.0';
+        $this->version = '0.4.0';
         $this->author = 'BlockSign';
         $this->tab = 'administration';
         $this->ps_versions_compliancy = ['min' => '9.0.0', 'max' => _PS_VERSION_];
@@ -57,6 +60,10 @@ class BlocksignEsign extends Module
         if (Tools::isSubmit('submitBlocksignEsign')) {
             $productId = filter_var(Tools::getValue(self::PRODUCT), FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
             try {
+                $scope = ProductScope::validate([
+                    'mode' => Tools::getValue('blocksign_scope'),
+                    'category_id' => Tools::getValue('blocksign_category', 0),
+                ]);
                 $placement = SignatureSettings::validate([
                     'signature_level' => Tools::getValue('blocksign_level'),
                     'page' => Tools::getValue('blocksign_page'),
@@ -71,7 +78,8 @@ class BlocksignEsign extends Module
                     throw new InvalidArgumentException('Enter one PDF per line.');
                 }
                 RequiredSignatures::parseAdditional($documents);
-                if (!Configuration::updateValue(self::DOCUMENTS, trim($documents))
+                if (!Configuration::updateValue(self::SCOPE, json_encode($scope, JSON_THROW_ON_ERROR))
+                    || !Configuration::updateValue(self::DOCUMENTS, trim($documents))
                     || !Configuration::updateValue(self::SIGNATURE, json_encode($placement, JSON_THROW_ON_ERROR))
                     || !Configuration::updateValue(self::PRODUCT, $productId)) {
                     throw new RuntimeException('Could not save the BlockSign settings.');
@@ -88,8 +96,11 @@ class BlocksignEsign extends Module
         $form->token = Tools::getAdminTokenLite('AdminModules');
         $form->submit_action = 'submitBlocksignEsign';
         $settings = self::signatureSettings();
+        $scope = self::productScope();
         $form->fields_value = [
             self::PRODUCT => (int) Configuration::get(self::PRODUCT),
+            'blocksign_scope' => $scope['mode'],
+            'blocksign_category' => $scope['category_id'],
             self::DOCUMENTS => (string) Configuration::get(self::DOCUMENTS),
             'blocksign_level' => $settings['signature_level'],
             'blocksign_page' => $settings['page'],
@@ -99,10 +110,23 @@ class BlocksignEsign extends Module
         return $output . $form->generateForm([['form' => [
             'legend' => ['title' => 'BlockSign eSign'],
             'input' => [[
+                'type' => 'select',
+                'name' => 'blocksign_scope',
+                'label' => 'Protected products',
+                'options' => ['query' => [
+                    ['id' => 'product', 'name' => 'Single product'],
+                    ['id' => 'category', 'name' => 'Product category'],
+                    ['id' => 'all', 'name' => 'All eligible virtual products'],
+                ], 'id' => 'id', 'name' => 'name'],
+            ], [
+                'type' => 'text',
+                'name' => 'blocksign_category',
+                'label' => 'Category ID (category scope)',
+            ], [
                 'type' => 'text',
                 'name' => self::PRODUCT,
                 'label' => 'Protected product ID',
-                'desc' => 'Use a virtual product with no native download or attachment. Enter 0 to disable new requests.',
+                'desc' => 'Use a virtual product with no native download or attachment. In single-product scope, enter 0 to disable new requests.',
             ], [
                 'type' => 'select',
                 'name' => 'blocksign_level',
@@ -129,6 +153,12 @@ class BlocksignEsign extends Module
         ]]]);
     }
 
+    private static function productScope(?int $shopId = null): array
+    {
+        $stored = Configuration::get(self::SCOPE, null, null, $shopId);
+        return $stored ? ProductScope::validate(json_decode($stored, true, 512, JSON_THROW_ON_ERROR)) : ProductScope::DEFAULTS;
+    }
+
     private static function signatureSettings(?int $shopId = null): array
     {
         $stored = Configuration::get(self::SIGNATURE, null, null, $shopId);
@@ -138,21 +168,32 @@ class BlocksignEsign extends Module
     public function hookActionValidateOrderAfter(array $params): void
     {
         foreach ($params['orders'] ?? [] as $order) {
-            $productId = (int) Configuration::get(self::PRODUCT, null, null, (int) $order->id_shop);
+            $shopId = (int) $order->id_shop;
+            $scope = self::productScope($shopId);
+            $configuredProduct = (int) Configuration::get(self::PRODUCT, null, null, $shopId);
             $total = (float) $order->total_paid_tax_incl;
             $timing = $total > 0.0 ? 'after_payment' : 'without_payment';
-            if (!$productId || !self::matchesTiming($order, $timing)) {
+            if (($scope['mode'] === 'product' && !$configuredProduct) || !self::matchesTiming($order, $timing)) {
                 continue;
             }
             $items = $order->getProductsDetail();
             $item = reset($items);
-            if (count($items) !== 1 || (int) $item['product_id'] !== $productId || (int) $item['product_quantity'] !== 1) {
+            if (count($items) !== 1 || (int) $item['product_quantity'] !== 1) {
                 continue;
             }
 
-            $product = new Product($productId, false, null, (int) $order->id_shop);
+            $productId = (int) $item['product_id'];
+            if ($scope['mode'] === 'product' && $productId !== $configuredProduct) {
+                continue;
+            }
+
+            $product = new Product($productId, false, null, $shopId);
+            $categories = $scope['mode'] === 'category' ? $product->getCategories() : [];
             $customer = $params['customer'];
-            if (!$product->is_virtual || (int) $customer->id !== (int) $order->id_customer || !Validate::isEmail($customer->email)) {
+            if (!$product->is_virtual || (int) ($item['product_attribute_id'] ?? 0) !== 0
+                || !ProductScope::matches($scope, $configuredProduct, $productId, $categories)
+                || ProductDownload::getIdFromIdProduct($productId) || $product->getAttachments((int) $order->id_lang)
+                || (int) $customer->id !== (int) $order->id_customer || !Validate::isEmail($customer->email)) {
                 continue;
             }
 

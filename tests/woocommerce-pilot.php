@@ -65,7 +65,9 @@ class WC_Product
 {
     public function is_type(string $type): bool { return $type === 'simple'; }
     public function is_virtual(): bool { return true; }
-    public function is_downloadable(): bool { return false; }
+    public static bool $downloadable = false;
+    public function is_downloadable(): bool { return self::$downloadable; }
+    public function get_category_ids(): array { return [21]; }
 }
 
 class WC_Order_Item
@@ -97,6 +99,7 @@ function get_option(string $name, mixed $default = false): mixed
 {
     return match ($name) {
         'blocksign_esign_product' => 7,
+        'blocksign_esign_scope' => $GLOBALS['configured_scope'] ?? $default,
         'blocksign_esign_paid_timing' => $GLOBALS['configured_timing'],
         default => $default,
     };
@@ -297,3 +300,26 @@ $order->paid = true;
 $order->paidAt = new DateTimeImmutable();
 check(download_allowed($order, $order->state), 'signed and paid prepayment download remains locked');
 echo "PASS WooCommerce classic checkout, early order-pay denial and payment resumption\n";
+
+$configured_scope = ['mode' => 'category', 'category_id' => 22];
+$order = new WC_Order([]);
+$hooks['woocommerce_checkout_create_order']($order);
+check($order->state === [], 'unrelated category matched');
+
+$configured_scope = ['mode' => 'category', 'category_id' => 21];
+$hooks['woocommerce_checkout_create_order']($order);
+check(($order->state['product_id'] ?? 0) === 7, 'configured category did not match');
+$existing = $order->state;
+$configured_scope['category_id'] = 22;
+$hooks['woocommerce_checkout_create_order']($order);
+check($order->state === $existing, 'changing scope altered an existing order');
+
+$configured_scope = ['mode' => 'all', 'category_id' => 0];
+$order = new WC_Order([]);
+WC_Product::$downloadable = true;
+$hooks['woocommerce_checkout_create_order']($order);
+check($order->state === [], 'catalog-wide scope selected a native download');
+WC_Product::$downloadable = false;
+$hooks['woocommerce_checkout_create_order']($order);
+check(($order->state['product_id'] ?? 0) === 7, 'catalog-wide scope did not select eligible product');
+echo "PASS WooCommerce product scopes\n";
