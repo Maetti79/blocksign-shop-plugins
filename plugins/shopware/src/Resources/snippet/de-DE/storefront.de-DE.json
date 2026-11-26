@@ -1,0 +1,13 @@
+{
+  "blocksign": {
+    "status": "BlockSign-Status und Downloads",
+    "request": "BlockSign-Bestätigung anfordern",
+    "unavailable": "Die BlockSign-Bestätigung ist gerade nicht verfügbar. Bitte kontaktiere den Shop.",
+    "confirmed": "Alle erforderlichen BlockSign-Bestätigungen liegen vor.",
+    "pending": "Prüfe deine E-Mails auf die BlockSign-Einladung und lade die Seite nach der Bestätigung erneut.",
+    "paymentPending": "BlockSign wartet auf die Zahlungsbestätigung."
+  },
+  "checkout": {
+    "blocksign-confirmation-required": "Bestätige zuerst alle erforderlichen Dokumente mit BlockSign."
+  }
+}

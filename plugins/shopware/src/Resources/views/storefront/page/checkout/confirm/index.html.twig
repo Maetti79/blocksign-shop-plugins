@@ -1,0 +1,24 @@
+{% sw_extends '@Storefront/storefront/page/checkout/confirm/index.html.twig' %}
+
+{% block page_checkout_confirm_alerts %}
+    {{ parent() }}
+    {% set blocksign = page.extensions.blocksign %}
+    {% if blocksign %}
+        <div class="card mb-4">
+            <div class="card-body">
+                {% if blocksign.unavailable %}
+                    <p>{{ 'blocksign.unavailable'|trans }}</p>
+                {% elseif blocksign.confirmed %}
+                    <p>{{ 'blocksign.confirmed'|trans }}</p>
+                {% elseif blocksign.requested %}
+                    <p>{{ 'blocksign.pending'|trans }}</p>
+                {% else %}
+                    <form method="post" action="{{ path('frontend.blocksign.request') }}">
+                        <input type="hidden" name="proof" value="{{ blocksign.proof }}">
+                        <button type="submit" class="btn btn-primary">{{ 'blocksign.request'|trans }}</button>
+                    </form>
+                {% endif %}
+            </div>
+        </div>
+    {% endif %}
+{% endblock %}

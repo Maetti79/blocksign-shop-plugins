@@ -1,0 +1,8 @@
+{% sw_extends '@Storefront/storefront/page/checkout/finish/index.html.twig' %}
+
+{% block page_checkout_finish_details %}
+    {{ parent() }}
+    {% if page.order.extensions.blocksign is defined %}
+        <p><a href="{{ path('frontend.blocksign.order', {orderId: page.order.id}) }}">{{ 'blocksign.status'|trans }}</a></p>
+    {% endif %}
+{% endblock %}

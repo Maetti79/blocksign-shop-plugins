@@ -8,6 +8,7 @@ BlockSign eSign verknüpft Shop-Bestellungen mit elektronischen Unterschriften. 
 | --- | --- | --- |
 | WooCommerce | Ohne Zahlung, nach Zahlung, vor Zahlung und vor Bestellabgabe im klassischen Checkout und in Checkout Blocks | [WooCommerce-README](plugins/woocommerce/README.md) |
 | PrestaShop 9 | Ohne Zahlung, nach Zahlung und vor Bestellabgabe im Standard-Checkout mit 0‑€‑Bestellung, Vorkasse oder Scheck | [PrestaShop-README](plugins/prestashop/README.md) |
+| Shopware 6.7 | Ohne Zahlung, nach Zahlung und vor Bestellabgabe und Zahlung im Standard-Checkout | [Shopware-README](plugins/shopware/README.md) |
 
 GitHub Actions baut die Installationspakete. [Workflow und ZIP-Artefakte](https://github.com/Maetti79/blocksign-shop-plugins/actions/workflows/check.yml)
 
@@ -18,7 +19,7 @@ GitHub Actions baut die Installationspakete. [Workflow und ZIP-Artefakte](https:
 - **Elektronische Zustellnachweise** als Alternative zur Signatur für einzelne Pflichtdokumente.
 - **Private Ablage von Nachweisen** für signierte PDFs, Audit-Trails und zugestellte PDFs.
 - **Versandfreigabe in WooCommerce und PrestaShop** für markierte physische Produkte nach Bestätigung der Pflichtdokumente.
-- **Automatische Zugangsfreigabe** zu privaten Seiten in WooCommerce und per Kundengruppe in PrestaShop.
+- **Automatische Zugangsfreigabe** zu privaten Seiten in WooCommerce und per Kundengruppe in PrestaShop und Shopware.
 - **Geschützter Download** mit einer Freigabeprüfung anhand des Bestell-, Zahlungs- und Signaturstatus.
 
 Die Module unterstützen gemischte Warenkörbe und mehrere geschützte PDF-Produkte pro Bestellung. Für jedes Produkt lassen sich das erste Pflichtdokument und der geschützte PDF-Download einzeln festlegen. Weitere Shop-Adapter sind geplante Ausbaustufen.

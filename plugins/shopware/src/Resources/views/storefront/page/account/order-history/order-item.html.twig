@@ -1,0 +1,8 @@
+{% sw_extends '@Storefront/storefront/page/account/order-history/order-item.html.twig' %}
+
+{% block page_account_order_item_order_number %}
+    {{ parent() }}
+    {% if order.extensions.blocksign is defined %}
+        <a href="{{ path('frontend.blocksign.order', {orderId: order.id}) }}">{{ 'blocksign.status'|trans }}</a>
+    {% endif %}
+{% endblock %}

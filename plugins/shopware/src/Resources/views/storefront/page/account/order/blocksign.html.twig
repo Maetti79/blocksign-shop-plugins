@@ -1,0 +1,21 @@
+{% sw_extends '@Storefront/storefront/base.html.twig' %}
+
+{% block base_content %}
+    <main class="container py-4">
+        <h1>{{ 'blocksign.status'|trans }} · {{ orderNumber }}</h1>
+        {% if not paid %}
+            <p>{{ 'blocksign.paymentPending'|trans }}</p>
+        {% elseif confirmed %}
+            <p>{{ 'blocksign.confirmed'|trans }}</p>
+        {% else %}
+            <p>{{ 'blocksign.pending'|trans }}</p>
+        {% endif %}
+        {% if downloads %}
+            <ul>
+                {% for product, file in downloads %}
+                    <li><a href="{{ path('frontend.blocksign.order', {orderId: orderId, product: product}) }}">{{ file.file }}</a></li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+    </main>
+{% endblock %}

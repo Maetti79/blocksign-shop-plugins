@@ -31,3 +31,9 @@ jobs:
         with:
           name: blocksign-esign-prestashop
           path: build/blocksign-esign-prestashop.zip
+      - run: scripts/build-shopware.sh
+      - run: unzip -q build/blocksign-esign-shopware.zip -d build && php tests/shopware-pilot.php build/BlockSignEsign
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blocksign-esign-shopware
+          path: build/blocksign-esign-shopware.zip

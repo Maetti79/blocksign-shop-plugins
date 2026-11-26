@@ -1,0 +1,98 @@
+<?xml version='1.0' encoding='utf-8'?>
+<config>
+    <card>
+        <title>BlockSign eSign</title>
+        <input-field type="bool">
+            <name>enabled</name>
+            <label>BlockSign aktivieren</label>
+        </input-field>
+        <input-field type="password">
+            <name>apiKey</name>
+            <label>BlockSign API-Key</label>
+        </input-field>
+        <input-field type="text">
+            <name>pdfDirectory</name>
+            <label>Privates PDF-Verzeichnis</label>
+        </input-field>
+        <input-field type="text">
+            <name>archiveDirectory</name>
+            <label>Privates Nachweisarchiv</label>
+        </input-field>
+        <input-field type="single-select">
+            <name>scope</name>
+            <label>Produktzuordnung</label>
+            <defaultValue>selected</defaultValue>
+            <options>
+                <option>
+                    <id>selected</id>
+                    <name>Markierte oder konfigurierte Produkte</name>
+                </option>
+                <option>
+                    <id>all</id>
+                    <name>Alle Produkte</name>
+                </option>
+            </options>
+        </input-field>
+        <input-field type="single-select">
+            <name>timing</name>
+            <label>Standardzeitpunkt</label>
+            <defaultValue>after_payment</defaultValue>
+            <options>
+                <option>
+                    <id>after_payment</id>
+                    <name>Nach Zahlung oder 0-€-Bestellung</name>
+                </option>
+                <option>
+                    <id>before_order</id>
+                    <name>Vor Bestellabgabe und Zahlung</name>
+                </option>
+            </options>
+        </input-field>
+        <input-field type="single-select">
+            <name>level</name>
+            <label>Signaturniveau des ersten Pflichtdokuments</label>
+            <defaultValue>aes</defaultValue>
+            <options>
+                <option>
+                    <id>aes</id>
+                    <name>EES</name>
+                </option>
+                <option>
+                    <id>fes</id>
+                    <name>FES</name>
+                </option>
+                <option>
+                    <id>qes</id>
+                    <name>QES</name>
+                </option>
+                <option>
+                    <id>pod</id>
+                    <name>Zustellnachweis</name>
+                </option>
+            </options>
+        </input-field>
+        <input-field type="int">
+            <name>page</name>
+            <label>PDF-Seite</label>
+            <defaultValue>1</defaultValue>
+        </input-field>
+        <input-field type="float">
+            <name>x</name>
+            <label>X</label>
+            <defaultValue>50</defaultValue>
+        </input-field>
+        <input-field type="float">
+            <name>y</name>
+            <label>Y</label>
+            <defaultValue>50</defaultValue>
+        </input-field>
+        <input-field type="textarea">
+            <name>documents</name>
+            <label>Weitere Pflichtdokumente</label>
+        </input-field>
+        <input-field type="textarea">
+            <name>productRules</name>
+            <label>Regeln für Produkte und Kategorien (JSON)</label>
+        </input-field>
+    </card>
+</config>

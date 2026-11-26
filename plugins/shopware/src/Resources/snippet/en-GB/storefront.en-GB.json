@@ -1,0 +1,13 @@
+{
+  "blocksign": {
+    "status": "BlockSign status and downloads",
+    "request": "Request BlockSign confirmation",
+    "unavailable": "BlockSign confirmation is unavailable. Please contact the shop.",
+    "confirmed": "All required BlockSign confirmations are complete.",
+    "pending": "Check your email for the BlockSign invitation. Reload this page after confirming.",
+    "paymentPending": "BlockSign is waiting for payment confirmation."
+  },
+  "checkout": {
+    "blocksign-confirmation-required": "Confirm the required documents with BlockSign first."
+  }
+}

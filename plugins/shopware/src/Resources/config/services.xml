@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<container xmlns="http://symfony.com/schema/dic/services">
+    <services>
+        <defaults autowire="true" autoconfigure="true"/>
+
+        <service id="BlockSign\Shopware\Checkout\Jobs"/>
+        <service id="BlockSign\Shopware\Checkout\Rules">
+            <argument key="$products" type="service" id="product.repository"/>
+            <argument key="$publicDir">%kernel.project_dir%/public</argument>
+            <argument key="$cartSecret">%kernel.secret%</argument>
+        </service>
+        <service id="BlockSign\Shopware\Checkout\OrderConfirmation"/>
+        <service id="BlockSign\Shopware\Checkout\ShippingGuard"/>
+        <service id="BlockSign\Shopware\Checkout\StorefrontPages"/>
+        <service id="BlockSign\Shopware\Checkout\Fulfillment">
+            <argument key="$orders" type="service" id="order.repository"/>
+            <argument key="$customers" type="service" id="customer.repository"/>
+        </service>
+        <service id="BlockSign\Shopware\Checkout\GuardedPayment" decorates="Shopware\Core\Checkout\Payment\PaymentProcessor">
+            <argument type="service" id=".inner"/>
+        </service>
+        <service id="BlockSign\Shopware\Checkout\LockedOrderPersister" decorates="Shopware\Core\Checkout\Cart\Order\OrderPersister">
+            <argument type="service" id=".inner"/>
+        </service>
+        <service id="BlockSign\Shopware\Command\ProcessConfirmations">
+            <argument key="$publicDir">%kernel.project_dir%/public</argument>
+        </service>
+        <service id="BlockSign\Shopware\Controller\ConfirmationController" public="true">
+            <call method="setContainer"><argument type="service" id="service_container"/></call>
+        </service>
+    </services>
+</container>
