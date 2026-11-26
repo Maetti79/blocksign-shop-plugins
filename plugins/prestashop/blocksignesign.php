@@ -31,6 +31,9 @@ require_once __DIR__ . '/core/EvidenceArchive.php';
 
 class BlocksignEsign extends Module
 {
+    private const PREORDER = 'BLOCKSIGN_ESIGN_PREORDER';
+    private const OFFLINE_MODULES = ['ps_wirepayment', 'ps_checkpayment'];
+    private static array $approvedCarts = [];
     private const PRODUCT = 'BLOCKSIGN_ESIGN_PRODUCT';
     private const SCOPE = 'BLOCKSIGN_ESIGN_SCOPE';
     private const PRODUCT_FLAG = 'blocksign_esign_required';
@@ -43,7 +46,7 @@ class BlocksignEsign extends Module
     public function __construct()
     {
         $this->name = 'blocksignesign';
-        $this->version = '0.9.0';
+        $this->version = '0.10.0';
         $this->author = 'BlockSign';
         $this->tab = 'administration';
         $this->ps_versions_compliancy = ['min' => '9.0.0', 'max' => _PS_VERSION_];
@@ -67,7 +70,24 @@ class BlocksignEsign extends Module
                 ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8mb4'
             )
             && $this->registerHook(['actionValidateOrderAfter', 'displayOrderConfirmation', 'displayOrderDetail'])
-            && $this->registerProductHooks();
+            && $this->registerProductHooks()
+            && $this->installPreorder();
+    }
+
+    public function installPreorder(): bool
+    {
+        return Db::getInstance()->execute(
+            'CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . 'blocksign_esign_preorder` (
+                fingerprint CHAR(64) NOT NULL PRIMARY KEY,
+                id_shop INT UNSIGNED NOT NULL,
+                state TEXT NOT NULL,
+                next_attempt INT UNSIGNED NOT NULL,
+                expires INT UNSIGNED NOT NULL,
+                used TINYINT UNSIGNED NOT NULL DEFAULT 0,
+                INDEX due (next_attempt, expires),
+                INDEX expiry (expires)
+            ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8mb4'
+        ) && $this->registerHook(['displayPaymentTop', 'actionPresentPaymentOptions', 'actionValidateOrderBefore']);
     }
 
     public function registerProductHooks(): bool
@@ -176,7 +196,8 @@ class BlocksignEsign extends Module
                     throw new InvalidArgumentException('Enter one category document per line.');
                 }
                 CategoryDocuments::parse($categoryDocuments);
-                if (!Configuration::updateValue(self::SCOPE, json_encode($scope, JSON_THROW_ON_ERROR))
+                if (!Configuration::updateValue(self::PREORDER, Tools::getValue('blocksign_preorder') === '1' ? 1 : 0)
+                    || !Configuration::updateValue(self::SCOPE, json_encode($scope, JSON_THROW_ON_ERROR))
                     || !Configuration::updateValue(self::DOCUMENTS, trim($documents))
                     || !Configuration::updateValue(self::CATEGORY_DOCUMENTS, trim($categoryDocuments))
                     || !Configuration::updateValue(self::SIGNATURE, json_encode($placement, JSON_THROW_ON_ERROR))
@@ -199,6 +220,7 @@ class BlocksignEsign extends Module
         $form->fields_value = [
             self::PRODUCT => (int) Configuration::get(self::PRODUCT),
             'blocksign_scope' => $scope['mode'],
+            'blocksign_preorder' => (int) Configuration::get(self::PREORDER),
             'blocksign_category' => $scope['category_id'],
             self::DOCUMENTS => (string) Configuration::get(self::DOCUMENTS),
             self::CATEGORY_DOCUMENTS => (string) Configuration::get(self::CATEGORY_DOCUMENTS),
@@ -210,6 +232,15 @@ class BlocksignEsign extends Module
         return $output . $form->generateForm([['form' => [
             'legend' => ['title' => 'BlockSign eSign'],
             'input' => [[
+                'type' => 'switch',
+                'name' => 'blocksign_preorder',
+                'label' => 'Require confirmation before order and payment',
+                'desc' => 'For protected carts, use only native free orders, bank transfer and check payment. Disable other payment modules for these products.',
+                'values' => [
+                    ['id' => 'blocksign_preorder_on', 'value' => 1, 'label' => 'Yes'],
+                    ['id' => 'blocksign_preorder_off', 'value' => 0, 'label' => 'No'],
+                ],
+            ], [
                 'type' => 'select',
                 'name' => 'blocksign_scope',
                 'label' => 'Protected products',
@@ -273,6 +304,180 @@ class BlocksignEsign extends Module
         return $stored ? SignatureSettings::validate(json_decode($stored, true, 512, JSON_THROW_ON_ERROR)) : SignatureSettings::DEFAULTS;
     }
 
+    private static function fileSnapshots(array $items, int $shopId, int $languageId): array
+    {
+        $scope = self::productScope($shopId);
+        $configuredProduct = (int) Configuration::get(self::PRODUCT, null, null, $shopId);
+        $products = [];
+        $placement = $additional = null;
+        $categoryDocuments = CategoryDocuments::parse((string) Configuration::get(self::CATEGORY_DOCUMENTS, null, null, $shopId));
+        foreach ($items as $item) {
+            $productId = (int) $item['product_id'];
+            if (isset($products[$productId]) || ($scope['mode'] === 'product' && $productId !== $configuredProduct)) {
+                continue;
+            }
+            $product = new Product($productId, false, null, $shopId);
+            $categories = $scope['mode'] === 'category' || $categoryDocuments ? $product->getCategories() : [];
+            $flagged = $scope['mode'] === 'flagged' && self::productMarked($productId, $shopId);
+            if (!$product->is_virtual || (int) ($item['product_attribute_id'] ?? 0) !== 0
+                || !ProductScope::matches($scope, $configuredProduct, $productId, $categories, $flagged)
+                || ProductDownload::getIdFromIdProduct($productId) || $product->getAttachments($languageId)) {
+                continue;
+            }
+            $products[$productId] = ProductFiles::snapshot(
+                self::productFiles($productId, $shopId),
+                $placement ??= self::signatureSettings($shopId),
+                CategoryDocuments::forProduct(
+                    $additional ??= RequiredSignatures::parseAdditional((string) Configuration::get(self::DOCUMENTS, null, null, $shopId)),
+                    $categoryDocuments,
+                    $categories
+                ),
+                self::asset(...)
+            );
+        }
+        return $products;
+    }
+
+    private function checkoutProof(): ?array
+    {
+        $cart = $this->context->cart;
+        if (!$cart instanceof Cart || !(int) $cart->id
+            || !Configuration::get(self::PREORDER, null, null, (int) $cart->id_shop)) {
+            return null;
+        }
+        $items = [];
+        $lines = [];
+        foreach ($cart->getProducts() as $item) {
+            $items[] = [
+                'product_id' => (int) $item['id_product'],
+                'product_attribute_id' => (int) ($item['id_product_attribute'] ?? 0),
+            ];
+            $lines[] = [(int) $item['id_product'], (int) ($item['id_product_attribute'] ?? 0), (int) $item['cart_quantity']];
+        }
+        sort($lines);
+        $products = self::fileSnapshots($items, (int) $cart->id_shop, (int) $cart->id_lang);
+        if (!$products) {
+            return null;
+        }
+
+        $customer = $this->context->customer;
+        if (!$customer instanceof Customer || (int) $customer->id !== (int) $cart->id_customer
+            || !$customer->isLogged(true) || !Validate::isEmail($customer->email)) {
+            throw new RuntimeException('Enter your customer details before requesting BlockSign confirmation.');
+        }
+
+        $state = OrderFiles::combine($products) + ['timing' => 'before_order', 'signer_email' => $customer->email];
+        $identity = [(int) $cart->id, (int) $cart->id_customer, (int) $cart->id_currency, (int) $cart->id_shop,
+            (string) $cart->getOrderTotal(true, Cart::BOTH), $lines, $state];
+        return [hash_hmac('sha256', json_encode($identity, JSON_THROW_ON_ERROR), _COOKIE_KEY_), $state];
+    }
+
+    private static function preorderRow(string $key): ?array
+    {
+        $row = Db::getInstance()->getRow(
+            "SELECT * FROM `" . _DB_PREFIX_ . "blocksign_esign_preorder` WHERE fingerprint = '" . pSQL($key) . "' AND expires > " . time(),
+            false
+        );
+        return is_array($row) ? $row : null;
+    }
+
+    private static function readyProof(?array $row): ?array
+    {
+        if (!$row || (int) $row['used']) {
+            return null;
+        }
+        $state = json_decode($row['state'], true, 512, JSON_THROW_ON_ERROR);
+        return RequiredSignatures::complete($state) ? $state : null;
+    }
+
+    public function hookDisplayPaymentTop(): string
+    {
+        try {
+            $proof = $this->checkoutProof();
+            if (!$proof) {
+                return '';
+            }
+            $row = self::preorderRow($proof[0]);
+            if (self::readyProof($row)) {
+                return '<p>BlockSign confirmation is complete. You can now place the order.</p>';
+            }
+            if ($row) {
+                return (int) $row['used']
+                    ? '<p>This BlockSign confirmation has already been used. Check your orders or contact the shop.</p>'
+                    : '<p>Check your email for BlockSign. Refresh the checkout after confirming every required document.</p>';
+            }
+            $action = self::escape($this->context->link->getModuleLink($this->name, 'preorder', [], true));
+            return '<form method="post" action="' . $action . '"><input type="hidden" name="token" value="'
+                . self::escape(Tools::getToken(false)) . '"><button type="submit">Request BlockSign confirmation</button></form>';
+        } catch (Throwable $error) {
+            return '<p>BlockSign confirmation is unavailable. Contact the shop before placing the order.</p>';
+        }
+    }
+
+    public function hookActionPresentPaymentOptions(array $params): void
+    {
+        try {
+            $proof = $this->checkoutProof();
+            if (!$proof) {
+                return;
+            }
+            $params['paymentOptions'] = self::readyProof(self::preorderRow($proof[0]))
+                ? array_intersect_key($params['paymentOptions'], array_fill_keys([...self::OFFLINE_MODULES, 'free_order'], true))
+                : [];
+        } catch (Throwable $error) {
+            $params['paymentOptions'] = [];
+        }
+    }
+
+    public function startCheckoutProof(): void
+    {
+        $proof = $this->checkoutProof();
+        if (!$proof || $this->context->cart->OrderExists()) {
+            throw new RuntimeException('No eligible checkout is available.');
+        }
+
+        [$key, $state] = $proof;
+        $db = Db::getInstance();
+        $db->delete('blocksign_esign_preorder', "fingerprint = '" . pSQL($key) . "' AND expires <= " . time());
+        if (!$db->insert('blocksign_esign_preorder', [
+            'fingerprint' => pSQL($key),
+            'id_shop' => (int) $this->context->cart->id_shop,
+            'state' => pSQL(json_encode($state, JSON_THROW_ON_ERROR), true),
+            'next_attempt' => time(),
+            'expires' => time() + 604800,
+        ], false, true, Db::INSERT_IGNORE)) {
+            throw new RuntimeException('Could not start BlockSign confirmation.');
+        }
+    }
+
+    public function hookActionValidateOrderBefore(array $params): void
+    {
+        try {
+            $proof = $this->checkoutProof();
+            if (!$proof) {
+                return;
+            }
+            $cart = $this->context->cart;
+            $module = $this->context->controller->module->name ?? '';
+            $free = (float) $cart->getOrderTotal(true, Cart::BOTH) === 0.0
+                && $this->context->controller instanceof OrderConfirmationController && (bool) Tools::getValue('free_order');
+            $state = self::readyProof(self::preorderRow($proof[0]));
+            if (!$state || (!$free && !in_array($module, self::OFFLINE_MODULES, true))) {
+                throw new RuntimeException('BlockSign checkout confirmation is required.');
+            }
+
+            $db = Db::getInstance();
+            if (!$db->update('blocksign_esign_preorder', ['used' => 1],
+                "fingerprint = '" . pSQL($proof[0]) . "' AND used = 0 AND expires > " . time()) || (int) $db->Affected_Rows() !== 1) {
+                throw new RuntimeException('BlockSign checkout confirmation has already been used.');
+            }
+            self::$approvedCarts[(int) $cart->id] = $state;
+        } catch (Throwable $error) {
+            // PrestaShop can swallow ordinary hook exceptions in production.
+            Tools::redirect($this->context->link->getPageLink('order', true));
+        }
+    }
+
     public function hookActionValidateOrderAfter(array $params): void
     {
         foreach ($params['orders'] ?? [] as $order) {
@@ -290,40 +495,27 @@ class BlocksignEsign extends Module
             }
 
             try {
-                $products = [];
-                $placement = $additional = null;
-                $categoryDocuments = CategoryDocuments::parse((string) Configuration::get(self::CATEGORY_DOCUMENTS, null, null, $shopId));
-                foreach ($order->getProductsDetail() as $item) {
-                    $productId = (int) $item['product_id'];
-                    if (isset($products[$productId]) || ($scope['mode'] === 'product' && $productId !== $configuredProduct)) {
+                $items = $order->getProductsDetail();
+                $approved = self::$approvedCarts[(int) ($order->id_cart ?? 0)] ?? [];
+                $downloads = array_intersect_key($approved['downloads'] ?? [], array_flip(array_column($items, 'product_id')));
+                if ($approved) {
+                    if (!$downloads) {
                         continue;
                     }
-                    $product = new Product($productId, false, null, $shopId);
-                    $categories = $scope['mode'] === 'category' || $categoryDocuments ? $product->getCategories() : [];
-                    $flagged = $scope['mode'] === 'flagged' && self::productMarked($productId, $shopId);
-                    if (!$product->is_virtual || (int) ($item['product_attribute_id'] ?? 0) !== 0
-                        || !ProductScope::matches($scope, $configuredProduct, $productId, $categories, $flagged)
-                        || ProductDownload::getIdFromIdProduct($productId) || $product->getAttachments((int) $order->id_lang)) {
+                    $state = array_replace($approved, ['downloads' => $downloads]);
+                } else {
+                    $products = self::fileSnapshots($items, $shopId, (int) $order->id_lang);
+                    if (!$products) {
                         continue;
                     }
-                    $products[$productId] = ProductFiles::snapshot(
-                        self::productFiles($productId, $shopId),
-                        $placement ??= self::signatureSettings($shopId),
-                        CategoryDocuments::forProduct(
-                            $additional ??= RequiredSignatures::parseAdditional((string) Configuration::get(self::DOCUMENTS, null, null, $shopId)),
-                            $categoryDocuments,
-                            $categories
-                        ),
-                        self::asset(...)
-                    );
+                    if (Configuration::get(self::PREORDER, null, null, $shopId)) {
+                        throw new RuntimeException('Protected order reached registration without an approved checkout.');
+                    }
+                    $state = OrderFiles::combine($products) + [
+                        'timing' => $timing,
+                        'signer_email' => $customer->email,
+                    ];
                 }
-                if (!$products) {
-                    continue;
-                }
-                $state = OrderFiles::combine($products) + [
-                    'timing' => $timing,
-                    'signer_email' => $customer->email,
-                ];
                 $saved = Db::getInstance()->insert('blocksign_esign', [
                     'id_order' => (int) $order->id,
                     'id_shop' => (int) $order->id_shop,
@@ -411,6 +603,8 @@ class BlocksignEsign extends Module
         $total = (float) $order->total_paid_tax_incl;
         return match ($timing) {
             'without_payment' => $total === 0.0 && $order->module === 'free_order',
+            'before_order' => ($total === 0.0 && $order->module === 'free_order')
+                || ($total > 0.0 && in_array($order->module, self::OFFLINE_MODULES, true)),
             'after_payment' => $total > 0.0 && !in_array($order->module, ['free_order', 'ps_cashondelivery', 'cashondelivery'], true),
             default => false,
         };
@@ -418,7 +612,8 @@ class BlocksignEsign extends Module
 
     public static function paymentReady(Order $order, array $state): bool
     {
-        if (($state['timing'] ?? 'without_payment') === 'without_payment') {
+        if (($state['timing'] ?? 'without_payment') === 'without_payment'
+            || (($state['timing'] ?? '') === 'before_order' && (float) $order->total_paid_tax_incl === 0.0)) {
             return true;
         }
         $status = $order->getCurrentOrderState();
@@ -508,12 +703,52 @@ class BlocksignEsign extends Module
             );
             $client = self::client($apiKey);
             $workflow = new SignatureWorkflow($client);
+            self::processPreorders($workflow);
             $archive = getenv('BLOCKSIGN_ESIGN_ARCHIVE') ? new EvidenceArchive($client) : null;
             foreach ($rows as $candidate) {
                 self::processOrder((int) $candidate['id_order'], $workflow, $archive);
             }
         } finally {
             $db->getValue("SELECT RELEASE_LOCK('$lock')", false);
+        }
+    }
+
+    private static function processPreorders(SignatureWorkflow $workflow): void
+    {
+        $db = Db::getInstance();
+        $now = time();
+        $db->delete('blocksign_esign_preorder', 'expires <= ' . $now);
+        $rows = $db->executeS(
+            'SELECT q.* FROM `' . _DB_PREFIX_ . 'blocksign_esign_preorder` q
+            INNER JOIN `' . _DB_PREFIX_ . 'module_shop` ms ON ms.id_shop = q.id_shop
+            INNER JOIN `' . _DB_PREFIX_ . "module` m ON m.id_module = ms.id_module AND m.name = 'blocksignesign'
+            WHERE q.used = 0 AND q.expires > $now AND q.next_attempt BETWEEN 1 AND $now ORDER BY q.next_attempt LIMIT 20",
+            true,
+            false
+        );
+        foreach ($rows as $row) {
+            if (!Configuration::get(self::PREORDER, null, null, (int) $row['id_shop'])) {
+                $db->update('blocksign_esign_preorder', ['next_attempt' => time() + 3600], "fingerprint = '" . pSQL($row['fingerprint']) . "'");
+                continue;
+            }
+            $where = "fingerprint = '" . pSQL($row['fingerprint']) . "' AND used = 0";
+            $state = json_decode($row['state'], true, 512, JSON_THROW_ON_ERROR);
+            try {
+                $retry = RequiredSignatures::advance(
+                    $workflow,
+                    $state,
+                    static function (array $next) use ($db, $where, &$state): void {
+                        if (!$db->update('blocksign_esign_preorder', ['state' => pSQL(json_encode($next, JSON_THROW_ON_ERROR), true)], $where)) {
+                            throw new RuntimeException('Could not persist BlockSign checkout progress.');
+                        }
+                        $state = $next;
+                    },
+                    static fn (string $file) => file_get_contents(self::asset($file), false, null, 0, 10 * 1024 * 1024 + 1)
+                );
+            } catch (Throwable $error) {
+                $retry = !RequiredSignatures::needsReview($state);
+            }
+            $db->update('blocksign_esign_preorder', ['next_attempt' => $retry ? time() + 120 : 0], $where);
         }
     }
 

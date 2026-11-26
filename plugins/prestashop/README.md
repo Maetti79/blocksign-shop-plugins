@@ -55,6 +55,12 @@ Hat die Bestellung einen positiven Gesamtbetrag, wartet der Shop auf die Zahlung
 
 PrestaShop verarbeitet eine bezahlte Bestellung ab dem nächsten Worker-Lauf, sobald der aktuelle Bestellstatus als bezahlt gilt. Stornierte und erstattete Bestellungen sowie Positionen mit erstatteter Stückzahl bleiben gesperrt.
 
+## Bestellabgabe und Zahlung erst nach Bestätigung
+
+Aktiviere **Require confirmation before order and payment** in der Modulkonfiguration. Im Standard-Checkout startet der Kunde die Bestätigung über die BlockSign-Schaltfläche im Zahlungsschritt. Der CLI-Worker sendet die Einladungen. Nach der letzten Bestätigung lädt der Kunde den Checkout erneut und kann die Bestellung aufgeben. Die Freigabe gilt höchstens sieben Tage für den konkreten Warenkorb, den Kunden, den Betrag und die hinterlegten Dokumente. Sie lässt sich einmal verwenden.
+
+Der Modus unterstützt 0‑€‑Bestellungen sowie PrestaShops native Module für Vorkasse per Überweisung (`ps_wirepayment`) und Scheck (`ps_checkpayment`). Zahlungsanweisungen erscheinen dadurch erst nach der Bestätigung und Bestellabgabe. Deaktiviere alle anderen Zahlungswege für die geschützten Produkte. Der serverseitige Hook kennt den aktiven Browser-Warenkorb. Externe Zahlungsanbieter können Zahlungen außerhalb dieses Hooks auslösen. Ein Theme muss im Zahlungsschritt `displayPaymentTop` ausgeben. Aktualisiere das Modul im Modulmanager, damit die Tabelle und die Hooks angelegt werden.
+
 ## Elektronischer Zustellnachweis
 
 Wähle **Proof of delivery** für das erste Pflichtdokument. Für ein zusätzliches PDF verwende die Kurzform `mitteilung.pdf | POD`. Bei einer Kategorie stellst du ihre ID voran, zum Beispiel `21 | mitteilung.pdf | POD`. BlockSign versendet das Dokument zur Empfangsbestätigung. Für diesen Vorgang sind keine Signaturposition oder Signaturstufe erforderlich.

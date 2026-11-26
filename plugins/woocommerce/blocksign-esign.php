@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BlockSign eSign for WooCommerce
  * Description: Release a free virtual product after BlockSign confirms its signature.
- * Version: 0.12.0
+ * Version: 0.13.0
  * Requires PHP: 8.1
  * Requires Plugins: woocommerce
  * License: GPL-3.0-or-later
@@ -54,6 +54,7 @@ const GROUP = 'blocksign-esign';
 const PRODUCT_FLAG = '_blocksign_esign_required';
 const CHECKOUT_DEFERRED = 'blocksign_esign_payment_deferred';
 const PREORDER_JOB = 'blocksign_esign_preorder_check';
+const PREORDER_NOTICE = 'Check your email for BlockSign. After confirming all documents, submit the checkout again.';
 
 function configured_product(): int
 {
@@ -153,7 +154,7 @@ add_action('admin_menu', static function (): void {
         echo '</select></p>';
         printf('<p><label for="blocksign-category">Category ID (category scope)</label> <input id="blocksign-category" type="number" min="0" name="blocksign_esign_scope[category_id]" value="%d" required></p>', $scope['category_id']);
         printf('<label for="blocksign_esign_product">Protected product ID</label> <input id="blocksign_esign_product" type="number" min="0" name="blocksign_esign_product" value="%d">', configured_product());
-        printf('<p><label for="blocksign-paid-timing">Signature timing</label> <select id="blocksign-paid-timing" name="blocksign_esign_paid_timing"><option value="after_payment"%s>After payment</option><option value="before_payment"%s>Before payment</option><option value="before_order"%s>Before order (classic checkout)</option></select></p>',
+        printf('<p><label for="blocksign-paid-timing">Signature timing</label> <select id="blocksign-paid-timing" name="blocksign_esign_paid_timing"><option value="after_payment"%s>After payment</option><option value="before_payment"%s>Before payment</option><option value="before_order"%s>Before order</option></select></p>',
             selected(paid_timing(), 'after_payment', false), selected(paid_timing(), 'before_payment', false), selected(paid_timing(), 'before_order', false));
         $settings = signature_settings();
         echo '<p><label for="blocksign-signature-level">Signature level or proof of delivery</label> <select id="blocksign-signature-level" name="blocksign_esign_signature[signature_level]">';
@@ -237,7 +238,7 @@ function asset(string $name): string
     return $file;
 }
 
-function snapshot(WC_Order $order, bool $preview = false, bool $storeApi = false): void
+function snapshot(WC_Order $order, bool $preview = false): void
 {
     $existing = $order->get_meta(META);
     $items = $order->get_items();
@@ -257,6 +258,12 @@ function snapshot(WC_Order $order, bool $preview = false, bool $storeApi = false
         if ($total < 0 || ($timing !== 'before_order' && ($timing === 'without_payment') !== ($total === 0.0))
             || strcasecmp($existing['signer_email'], $order->get_billing_email()) !== 0) {
             throw new RuntimeException('The protected order payment requirement and email cannot be changed.');
+        }
+        if ($timing === 'before_order' && isset($existing['confirmed_total'])
+            && ($existing['confirmed_total'] !== preorder_total($total)
+                || $existing['confirmed_currency'] !== get_woocommerce_currency()
+                || ($order->has_status(['checkout-draft']) && ($existing['confirmed_expires'] ?? 0) <= time()))) {
+            throw new RuntimeException('The confirmed checkout has expired or its total or currency has changed.');
         }
         if ($timing !== 'without_payment' && $order->get_payment_method() === 'cod') {
             throw new RuntimeException('Cash on delivery is unavailable for the protected PDF.');
@@ -297,9 +304,6 @@ function snapshot(WC_Order $order, bool $preview = false, bool $storeApi = false
     }
     $configuredTiming = paid_timing();
     $timing = $total > 0 || $configuredTiming === 'before_order' ? $configuredTiming : 'without_payment';
-    if ($storeApi && $timing === 'before_order') {
-        throw new RuntimeException('Use the classic WooCommerce checkout for signatures before order placement.');
-    }
     if ($total > 0 && $order->get_payment_method() === 'cod') {
         throw new RuntimeException('Cash on delivery is unavailable for the protected PDF.');
     }
@@ -335,12 +339,17 @@ function snapshot(WC_Order $order, bool $preview = false, bool $storeApi = false
     }
 }
 
+function preorder_total(float $total): string
+{
+    return wc_format_decimal($total, wc_get_price_decimals());
+}
+
 function preorder_key(array $state, float $total): string
 {
     $identity = json_encode([
         WC()->session->get_customer_id(),
         get_woocommerce_currency(),
-        wc_format_decimal($total, wc_get_price_decimals()),
+        preorder_total($total),
         $state,
     ], JSON_THROW_ON_ERROR);
     return hash_hmac('sha256', $identity, wp_salt('auth'));
@@ -358,7 +367,34 @@ function consume_preorder(array $state, float $total): array
         if (!$pending || !RequiredSignatures::complete($pending['state']) || !delete_transient('bs_esign_pre_' . $key)) {
             throw new RuntimeException('Confirm all required BlockSign documents before placing the order.');
         }
-        return $pending['state'];
+        return $pending['state'] + [
+            'confirmed_total' => preorder_total($total),
+            'confirmed_currency' => get_woocommerce_currency(),
+            'confirmed_expires' => $pending['expires'],
+        ];
+    } finally {
+        delete_option($lock);
+    }
+}
+
+function request_preorder(array $state, float $total): bool
+{
+    $key = preorder_key($state, $total);
+    $name = 'bs_esign_pre_' . $key;
+    $lock = 'bs_esign_pre_lock_' . $key;
+    if (!add_option($lock, 1, '', false)) {
+        return false;
+    }
+    try {
+        $pending = get_transient($name);
+        if ($pending) {
+            return RequiredSignatures::complete($pending['state']);
+        }
+        if (!set_transient($name, ['state' => $state, 'expires' => time() + WEEK_IN_SECONDS], WEEK_IN_SECONDS)) {
+            throw new RuntimeException('Could not start BlockSign signing. Please try again.');
+        }
+        as_enqueue_async_action(PREORDER_JOB, [$key], GROUP, true);
+        return false;
     } finally {
         delete_option($lock);
     }
@@ -387,25 +423,9 @@ add_action('woocommerce_after_checkout_validation', static function (array $data
             return;
         }
 
-        $key = preorder_key($state, $total);
-        $lock = 'bs_esign_pre_lock_' . $key;
-        if (add_option($lock, 1, '', false)) {
-            try {
-                $pending = get_transient('bs_esign_pre_' . $key);
-                if ($pending && RequiredSignatures::complete($pending['state'])) {
-                    return;
-                }
-                if (!$pending && !set_transient('bs_esign_pre_' . $key, ['state' => $state, 'expires' => time() + WEEK_IN_SECONDS], WEEK_IN_SECONDS)) {
-                    throw new RuntimeException('Could not start BlockSign signing. Please try again.');
-                }
-                if (!$pending) {
-                    as_enqueue_async_action(PREORDER_JOB, [$key], GROUP, true);
-                }
-            } finally {
-                delete_option($lock);
-            }
+        if (!request_preorder($state, $total)) {
+            $errors->add('blocksign_preorder', PREORDER_NOTICE);
         }
-        $errors->add('blocksign_preorder', 'Check your email for BlockSign. After confirming all documents, submit the checkout again.');
     } catch (RuntimeException | InvalidArgumentException $error) {
         $errors->add('blocksign_preorder', $error->getMessage());
     }
@@ -456,7 +476,19 @@ add_action('woocommerce_store_api_checkout_update_order_from_request', static fu
         return;
     }
     try {
-        snapshot($order, true, true);
+        snapshot($order, true);
+        $state = $order->get_meta(META);
+        if (!$state) {
+            return;
+        }
+
+        // Only a completed proof may remain attached when WooCommerce persists this draft.
+        $order->delete_meta_data(META);
+        $total = (float) $order->get_total();
+        if (!request_preorder($state, $total)) {
+            throw new RuntimeException(PREORDER_NOTICE);
+        }
+        $order->update_meta_data(META, consume_preorder($state, $total));
     } catch (RuntimeException | InvalidArgumentException $error) {
         throw new RouteException('blocksign_checkout', $error->getMessage(), 400);
     }
@@ -464,7 +496,11 @@ add_action('woocommerce_store_api_checkout_update_order_from_request', static fu
 
 add_action('woocommerce_store_api_checkout_order_processed', static function (WC_Order $order): void {
     try {
-        snapshot($order, false, true);
+        snapshot($order);
+        $stored = $order->get_meta(META);
+        if (($stored['timing'] ?? '') === 'before_order' && !payment_allowed($order, $stored)) {
+            throw new RuntimeException(PREORDER_NOTICE);
+        }
     } catch (RuntimeException | InvalidArgumentException $error) {
         throw new RouteException('blocksign_checkout', $error->getMessage(), 400);
     }

@@ -65,9 +65,9 @@ Diese Variante setzt einen Zahlungsanbieter voraus, der WooCommerces standardmä
 
 ## Bestellabgabe erst nach Signatur
 
-Wähle unter **Signature timing** die Option **Before order (classic checkout)**. Der erste Checkout-Versuch prüft die Angaben und plant die BlockSign-Einladungen im Hintergrund. Der Kunde bleibt auf der Checkout-Seite. Nach der Bestätigung aller Pflichtdokumente sendet er das Formular erneut ab. Erst dann legt WooCommerce die Bestellung an und startet bei einem zahlungspflichtigen Warenkorb die Zahlung. Die Auswahl gilt auch für 0‑€‑Bestellungen.
+Wähle unter **Signature timing** die Option **Before order**. Der erste Checkout-Versuch prüft die Angaben und plant die BlockSign-Einladungen im Hintergrund. Der Kunde bleibt auf der Checkout-Seite. Nach der Bestätigung aller Pflichtdokumente sendet er das Formular erneut ab. Erst dann legt WooCommerce die Bestellung an und startet bei einem zahlungspflichtigen Warenkorb die Zahlung. Die Auswahl gilt auch für 0‑€‑Bestellungen.
 
-Die Bestätigung gilt bis zu sieben Tage für die Checkout-Sitzung, den Warenkorb, die E-Mail-Adresse, den Gesamtbetrag und die Dokumentversionen. Eine Bestellung verbraucht die Bestätigung. Bei geänderten Angaben startet ein neuer Vorgang. Wenn die Bestellerstellung nach dem Verbrauch fehlschlägt, muss der Kunde erneut bestätigen. Verwende den klassischen Checkout ohne Express-Zahlungsbuttons. Checkout Blocks weist diesen Modus serverseitig ab.
+Die Bestätigung gilt bis zu sieben Tage für die Checkout-Sitzung, den Warenkorb, die E-Mail-Adresse, den Gesamtbetrag und die Dokumentversionen. Eine Bestellung verbraucht die Bestätigung. Bei geänderten Angaben startet ein neuer Vorgang. Wenn die Bestellerstellung nach dem Verbrauch fehlschlägt, muss der Kunde erneut bestätigen. Der Modus gilt im klassischen Checkout und in Checkout Blocks ohne Express-Zahlungsbuttons. Checkout Blocks kann einen internen Bestellentwurf speichern. Er bleibt bis zur Bestätigung ein Entwurf, und der Zahlungsanbieter wird in dieser Phase nicht aufgerufen.
 
 ## Elektronischer Zustellnachweis
 

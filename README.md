@@ -6,8 +6,8 @@ BlockSign eSign verknüpft Shop-Bestellungen mit elektronischen Unterschriften. 
 
 | Shop | Unterstützte Abläufe | Einrichtung |
 | --- | --- | --- |
-| WooCommerce | Ohne Zahlung, nach Zahlung und vor Zahlung im klassischen Checkout und in Checkout Blocks, vor Bestellung im klassischen Checkout | [WooCommerce-README](plugins/woocommerce/README.md) |
-| PrestaShop 9 | Ohne Zahlung und nach Zahlung | [PrestaShop-README](plugins/prestashop/README.md) |
+| WooCommerce | Ohne Zahlung, nach Zahlung, vor Zahlung und vor Bestellabgabe im klassischen Checkout und in Checkout Blocks | [WooCommerce-README](plugins/woocommerce/README.md) |
+| PrestaShop 9 | Ohne Zahlung, nach Zahlung und vor Bestellabgabe im Standard-Checkout mit 0‑€‑Bestellung, Vorkasse oder Scheck | [PrestaShop-README](plugins/prestashop/README.md) |
 
 GitHub Actions baut die Installationspakete. [Workflow und ZIP-Artefakte](https://github.com/Maetti79/blocksign-shop-plugins/actions/workflows/check.yml)
 
@@ -19,7 +19,7 @@ GitHub Actions baut die Installationspakete. [Workflow und ZIP-Artefakte](https:
 - **Private Ablage von Nachweisen** für signierte PDFs, Audit-Trails und zugestellte PDFs.
 - **Geschützter Download** mit einer Freigabeprüfung anhand des Bestell-, Zahlungs- und Signaturstatus.
 
-Die Module unterstützen gemischte Warenkörbe und mehrere geschützte PDF-Produkte pro Bestellung. Für jedes Produkt lassen sich das erste Pflichtdokument und der geschützte PDF-Download einzeln festlegen. Die Sperre vor Bestellung in Checkout Blocks und PrestaShop sowie weitere Shop-Adapter sind geplante Ausbaustufen.
+Die Module unterstützen gemischte Warenkörbe und mehrere geschützte PDF-Produkte pro Bestellung. Für jedes Produkt lassen sich das erste Pflichtdokument und der geschützte PDF-Download einzeln festlegen. Weitere Shop-Adapter sind geplante Ausbaustufen.
 
 ## Entwicklung
 

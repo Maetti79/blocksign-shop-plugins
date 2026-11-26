@@ -8,6 +8,7 @@ use BlockSign\ESign\SignatureWorkflow;
 define('_PS_VERSION_', '9.0.0');
 define('_PS_ROOT_DIR_', __DIR__);
 define('_DB_PREFIX_', 'ps_');
+define('_COOKIE_KEY_', 'fixture');
 
 $files = sys_get_temp_dir() . '/blocksign-presta-test-' . bin2hex(random_bytes(8));
 putenv('BLOCKSIGN_ESIGN_FILES=' . $files);
@@ -67,6 +68,7 @@ class Configuration
         }
         return match ($key) {
             'BLOCKSIGN_ESIGN_PRODUCT' => 99,
+            'BLOCKSIGN_ESIGN_PREORDER' => $GLOBALS['preorder_mode'] ?? 0,
             'BLOCKSIGN_ESIGN_CATEGORY_DOCUMENTS' => $GLOBALS['category_documents'] ?? '',
             'BLOCKSIGN_ESIGN_SCOPE' => $GLOBALS['configured_scope'] ?? '',
             'BLOCKSIGN_ESIGN_DOCUMENTS' => 'mandate.pdf | FES | 3 | 25 | 40',
@@ -83,6 +85,7 @@ class Order
     public int $id_shop = 2;
     public int $id_lang = 1;
     public int $id_customer = 81;
+    public int $id_cart = 7;
     public static bool $paid = false;
     public static bool $paidOrder = false;
     public int $current_state = 2;
@@ -147,10 +150,53 @@ class Validate
     }
 }
 
+class Cart
+{
+    public const BOTH = 3;
+    public int $id = 7;
+    public int $id_shop = 2;
+    public int $id_lang = 1;
+    public int $id_customer = 81;
+    public int $id_currency = 1;
+
+    public function getOrderTotal(bool $tax, int $type): float { return 10.0; }
+    public function getProducts(): array
+    {
+        return [['id_product' => '99', 'id_product_attribute' => '0', 'cart_quantity' => '1']];
+    }
+    public function OrderExists(): bool { return false; }
+}
+
+class Customer
+{
+    public int $id = 81;
+    public string $email = 'guest@example.com';
+    public function isLogged(bool $allowGuest): bool { return $allowGuest; }
+}
+
+class TestRedirect extends RuntimeException {}
+
+class Tools
+{
+    public static function redirect(string $url): never { throw new TestRedirect($url); }
+    public static function getToken(bool $page): string { return 'test-token'; }
+}
+
 class Db
 {
     public const INSERT_IGNORE = 2;
     public static array $row = [];
+    public static array $preorder = [];
+
+    public function delete(string $table, string $where): bool
+    {
+        return true;
+    }
+
+    public function Affected_Rows(): int
+    {
+        return 1;
+    }
 
     public static function getInstance(): self
     {
@@ -159,6 +205,10 @@ class Db
 
     public function insert(string $table, array $data, bool $nulls, bool $cache, int $mode): bool
     {
+        if ($table === 'blocksign_esign_preorder') {
+            self::$preorder = self::$preorder ?: $data + ['used' => 0];
+            return true;
+        }
         check($table === 'blocksign_esign' && $mode === self::INSERT_IGNORE, 'unexpected insertion');
         self::$row = self::$row ?: $data;
         return true;
@@ -166,19 +216,26 @@ class Db
 
     public function getRow(string $sql, bool $cache): array
     {
+        if (str_contains($sql, 'blocksign_esign_preorder')) {
+            return self::$preorder;
+        }
         check(str_ends_with($sql, 'id_order = 42') && !$cache, 'unexpected state lookup');
         return self::$row;
     }
 
     public function update(string $table, array $data, string $where): bool
     {
+        if ($table === 'blocksign_esign_preorder') {
+            self::$preorder = array_replace(self::$preorder, $data);
+            return true;
+        }
         check($table === 'blocksign_esign' && $where === 'id_order = 42', 'unexpected state update');
         self::$row = array_replace(self::$row, $data);
         return true;
     }
 }
 
-function pSQL(string $value, bool $html): string
+function pSQL(string $value, bool $html = false): string
 {
     return $value;
 }
@@ -366,3 +423,51 @@ $state = json_decode(Db::$row['state'], true);
 check(array_column($state['documents'], 'file') === ['custom-agreement.pdf', 'mandate.pdf', 'category-terms.pdf'],
     'matching category document was not included');
 echo "PASS PrestaShop category-specific documents\n";
+
+$preorder_mode = 1;
+$configured_scope = '{"mode":"product","category_id":0}';
+$module->context->cart = new Cart();
+$module->context->customer = new Customer();
+$module->context->controller = (object) ['module' => (object) ['name' => 'ps_checkpayment']];
+$module->context->link = new class {
+    public function getModuleLink(): string { return '/blocksign/preorder'; }
+    public function getPageLink(): string { return '/order'; }
+};
+check(str_contains($module->hookDisplayPaymentTop(), 'Request BlockSign'), 'checkout did not offer a signing start');
+$available = ['ps_checkpayment' => ['check'], 'stripe' => ['payment']];
+$options = $available;
+$module->hookActionPresentPaymentOptions(['paymentOptions' => &$options]);
+check($options === [], 'unconfirmed cart still lists payment methods');
+try {
+    $module->hookActionValidateOrderBefore(['cart' => $module->context->cart]);
+    check(false, 'direct payment validation bypassed the missing proof');
+} catch (TestRedirect $error) {
+    check($error->getMessage() === '/order', 'missing proof did not return the shopper to checkout');
+}
+
+$module->startCheckoutProof();
+$proof = json_decode(Db::$preorder['state'], true);
+foreach ($proof['documents'] as &$document) {
+    $document['completed'] = true;
+}
+unset($document);
+Db::$preorder['state'] = json_encode($proof);
+$options = $available;
+$module->hookActionPresentPaymentOptions(['paymentOptions' => &$options]);
+check(array_keys($options) === ['ps_checkpayment'], 'unsupported payment module remained available');
+$module->hookActionValidateOrderBefore(['cart' => $module->context->cart]);
+check(Db::$preorder['used'] === 1, 'checkout proof was not consumed');
+
+Db::$row = [];
+$order = new Order(42);
+$customer = $module->context->customer;
+$module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
+$archived = json_decode(Db::$row['state'], true);
+check($archived['timing'] === 'before_order' && \BlockSign\ESign\RequiredSignatures::complete($archived), 'order did not inherit completed cart proof');
+try {
+    $module->hookActionValidateOrderBefore(['cart' => $module->context->cart]);
+    check(false, 'consumed cart proof was reused');
+} catch (TestRedirect $error) {
+    check($error->getMessage() === '/order', 'proof replay did not return shopper to checkout');
+}
+echo "PASS PrestaShop confirmation before order and offline payment\n";

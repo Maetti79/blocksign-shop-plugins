@@ -66,6 +66,8 @@ class WC_Order
         $this->state = $value;
     }
 
+    public function delete_meta_data(string $key): void { $this->state = []; }
+
     public function save_meta_data(): void
     {
     }
@@ -606,16 +608,26 @@ try {
 } catch (RuntimeException $error) {
     check(str_contains($error->getMessage(), 'Confirm all required'), 'proof replay was not explicitly rejected');
 }
+$blockRequest = new WP_REST_Request('POST', '/wc/store/v1/checkout');
 try {
-    $hooks['woocommerce_store_api_checkout_update_order_from_request']($another, new WP_REST_Request('POST', '/wc/store/v1/checkout'));
-    check(false, 'Store API advanced the draft in classic checkout only mode');
+    $hooks['woocommerce_store_api_checkout_update_order_from_request']($another, $blockRequest);
+    check(false, 'Store API advanced an unsigned draft');
 } catch (RouteError $error) {
-    check($error->getCode() === 400 && $another->state === [], 'Store API draft must be rejected before checkout advances');
+    check($error->getCode() === 400 && $another->state === [] && count($transients) === 1,
+        'Store API must queue signatures without attaching incomplete state');
 }
+$transient = array_key_first($transients);
+$transients[$transient]['state']['documents'][0]['completed'] = true;
+$hooks['woocommerce_store_api_checkout_update_order_from_request']($another, $blockRequest);
+check($another->state['confirmed_total'] === '10.00' && $transients === [], 'Store API did not consume the completed proof');
+$another->total = 11;
 try {
     $hooks['woocommerce_store_api_checkout_order_processed']($another);
-    check(false, 'Store API placed an order in classic checkout only mode');
+    check(false, 'Store API accepted a changed total');
 } catch (RouteError $error) {
-    check($error->getCode() === 400, 'Store API should fail closed for a before-order product');
+    check($error->getCode() === 400, 'Store API must reject amount changes after proof');
 }
-echo "PASS WooCommerce before-order checkout and proof replay prevention\n";
+$another->total = 10;
+$hooks['woocommerce_store_api_checkout_order_processed']($another);
+check($another->state['documents'][0]['completed'] && !$another->paid, 'approved Store API order could not proceed');
+echo "PASS WooCommerce before-order protection in classic checkout and Checkout Blocks\n";
