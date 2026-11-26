@@ -2,40 +2,48 @@
 
 BlockSign eSign verknüpft Shop-Bestellungen mit elektronischen Unterschriften. Shopbetreiber hinterlegen PDF-Vorlagen und legen fest, welche Produkte die Dokumente erfordern. Ein geschützter PDF-Download wird freigegeben, sobald alle Pflichtsignaturen und bei bezahlten Bestellungen die Zahlungsbestätigung vorliegen.
 
+## BlockSign-Konto, API-Key und Abrechnung
+
+1. Lege ein BlockSign-Konto an. [blocksign.io](https://blocksign.io/)
+2. Erstelle im Konto einen API-Key und hinterlege ihn in den Plugin-Einstellungen oder in der Serverkonfiguration des Shops. Die Einrichtung steht in der jeweiligen Shop-README. [BlockSign-API-Dokumentation](https://blocksign.io/api/docs)
+3. Prüfe das Abrechnungsmodell für die benötigten Signaturen und Zustellnachweise. BlockSign nennt für anwendbare Dokumentprozesse **1 € je Signatur**. Bei FES und QES können zusätzlich Kosten für die persönliche Signaturberechtigung und Identifikation anfallen. [BlockSign-Preise](https://blocksign.io/pricing)
+
+Bei Fragen zu Konto, API-Key, Abrechnung oder Shop-Anbindung erreichst du Dennis per E-Mail. [dennis@blocksign.io](mailto:dennis@blocksign.io)
+
 ## Funktionsumfang und Status
 
 **Ja** steht für eine implementierte Funktion. **Teilweise** nennt die verfügbare Variante. **Offen** kennzeichnet ausstehende Funktionen oder Prüfungen.
 
-| Funktion | WooCommerce | PrestaShop | Shopware | Shopify |
-| --- | --- | --- | --- | --- |
-| API-Key und privater PDF-Pfad in der Shop-Oberfläche | Ja | Ja | Ja | Teilweise · Serverkonfiguration |
-| Regeln für ein Produkt oder alle geeigneten Produkte | Ja | Ja | Ja | Ja · auch je Variante |
-| Produktkategorien oder -gruppen | Ja · Kategorie | Ja · Kategorie | Ja · Kategorie | Ja · Produkt-Tags |
-| Markierung am Produkt | Ja · Checkbox | Ja · Checkbox | Ja · Zusatzfeld | Ja · Produkt-Tag |
-| Mehrere Pflichtdokumente je Bestellung | Ja | Ja | Ja | Ja |
-| EES, FES und QES | Ja | Ja | Ja | Ja |
-| PDF-Seite und X/Y-Position je Dokument | Ja | Ja | Ja | Ja |
-| Elektronischer Zustellnachweis | Ja | Ja | Ja | Ja |
-| Bestätigung ohne Zahlung bei 0 € | Ja | Ja | Ja | Ja |
-| Bestätigung nach Zahlungseingang | Ja | Ja | Ja | Ja |
-| Bestätigung vor Zahlung | Ja · Bestellzahlungsseite oder vor Bestellabgabe | Teilweise · Vorkasse und Scheck | Ja · vor Bestellabgabe im Standard-Checkout | Ja · eigener Kaufablauf mit Shopify-Rechnungslink |
-| Bestätigung vor verbindlicher Bestellabgabe im regulären Checkout | Ja · klassischer Checkout und Checkout Blocks | Teilweise · 0 €, Vorkasse und Scheck | Ja · Standard-Checkout | Offen |
-| Zeitpunkt pro Produkt oder Kategorie | Ja · vor Bestellung, vor Zahlung oder nach Zahlung | Ja · vor Bestellung oder nach Zahlung | Ja · Produkt- und Kategorieregeln | Teilweise · Regeln je Variante, Produkt und Tag. Vor Zahlung je Variante über Bestellentwurf |
-| Früh und spät zu bestätigende Dokumente im selben Warenkorb | Ja · drei getrennte Phasen | Ja · vor Bestellung und nach Zahlung im unterstützten Checkout | Ja · vor Bestellung und nach Zahlung | Teilweise · nach Zahlung im regulären Warenkorb. Vor Zahlung als Einzelvariante |
-| Geschützter PDF-Download nach Bestätigung | Ja | Ja | Ja | Ja · im Käuferkonto |
-| Versand im Shop bis zur Bestätigung sperren | Ja · Bestellstatus | Ja · Versandstatus | Ja · Lieferstatus | Teilweise · Freigabe-Tag für Versand-Workflows |
-| Automatischer Mitglieder- oder Kundenzugang | Ja · private Seite | Ja · Kundengruppe | Ja · Kundengruppe | Teilweise · private Mitglieder-PDFs |
-| Privates Archiv für signierte PDFs, Audit-Trails und Zustellnachweise | Ja | Ja | Ja | Ja |
-| Automatisierte Paket- und Funktionstests | Bestanden | Bestanden | Bestanden | Bestanden |
-| End-to-End-Abnahme mit BlockSign und echtem Zahlungsanbieter im Testmodus | Offen | Offen | Offen | Offen |
+| Funktion | WooCommerce | PrestaShop | Shopware | Shopify | JTL-Shop |
+| --- | --- | --- | --- | --- | --- |
+| API-Key und privater PDF-Pfad in der Shop-Oberfläche | Ja | Ja | Ja | Teilweise · Serverkonfiguration | Teilweise · Serverkonfiguration |
+| Regeln für ein Produkt oder alle geeigneten Produkte | Ja | Ja | Ja | Ja · auch je Variante | Ja |
+| Produktkategorien oder -gruppen | Ja · Kategorie | Ja · Kategorie | Ja · Kategorie | Ja · Produkt-Tags | Ja · Kategorie |
+| Markierung am Produkt | Ja · Checkbox | Ja · Checkbox | Ja · Zusatzfeld | Ja · Produkt-Tag | Offen · Regeln per Produkt-ID |
+| Mehrere Pflichtdokumente je Bestellung | Ja | Ja | Ja | Ja | Ja |
+| EES, FES und QES | Ja | Ja | Ja | Ja | Ja |
+| PDF-Seite und X/Y-Position je Dokument | Ja | Ja | Ja | Ja | Ja |
+| Elektronischer Zustellnachweis | Ja | Ja | Ja | Ja | Ja |
+| Bestätigung ohne Zahlung bei 0 € | Ja | Ja | Ja | Ja | Ja · mit Kundenkonto |
+| Bestätigung nach Zahlungseingang | Ja | Ja | Ja | Ja | Ja · über Zahlungsdatum in JTL-Shop |
+| Bestätigung vor Zahlung | Ja · Bestellzahlungsseite oder vor Bestellabgabe | Teilweise · Vorkasse und Scheck | Ja · vor Bestellabgabe im Standard-Checkout | Ja · eigener Kaufablauf mit Shopify-Rechnungslink | Offen |
+| Bestätigung vor verbindlicher Bestellabgabe im regulären Checkout | Ja · klassischer Checkout und Checkout Blocks | Teilweise · 0 €, Vorkasse und Scheck | Ja · Standard-Checkout | Offen | Offen |
+| Zeitpunkt pro Produkt oder Kategorie | Ja · vor Bestellung, vor Zahlung oder nach Zahlung | Ja · vor Bestellung oder nach Zahlung | Ja · Produkt- und Kategorieregeln | Teilweise · Regeln je Variante, Produkt und Tag. Vor Zahlung je Variante über Bestellentwurf | Offen · 0 € oder nach Zahlung |
+| Früh und spät zu bestätigende Dokumente im selben Warenkorb | Ja · drei getrennte Phasen | Ja · vor Bestellung und nach Zahlung im unterstützten Checkout | Ja · vor Bestellung und nach Zahlung | Teilweise · nach Zahlung im regulären Warenkorb. Vor Zahlung als Einzelvariante | Offen |
+| Geschützter PDF-Download nach Bestätigung | Ja | Ja | Ja | Ja · im Käuferkonto | Ja · im Käuferkonto |
+| Versand im Shop bis zur Bestätigung sperren | Ja · Bestellstatus | Ja · Versandstatus | Ja · Lieferstatus | Teilweise · Freigabe-Tag für Versand-Workflows | Offen |
+| Automatischer Mitglieder- oder Kundenzugang | Ja · private Seite | Ja · Kundengruppe | Ja · Kundengruppe | Teilweise · private Mitglieder-PDFs | Teilweise · private PDFs im Käuferkonto |
+| Privates Archiv für signierte PDFs, Audit-Trails und Zustellnachweise | Ja | Ja | Ja | Ja | Ja |
+| Automatisierte Paket- und Funktionstests | Bestanden | Bestanden | Bestanden | Bestanden | Bestanden |
+| End-to-End-Abnahme mit BlockSign und echtem Zahlungsanbieter im Testmodus | Offen | Offen | Offen | Offen | Offen |
 
 Für die Vorab-Bestätigung mit Kreditkarte, PayPal oder SEPA-Lastschrift in PrestaShop steht die Online-Zahlungsanbindung aus. In Shopify legt der Shop die verfügbaren Zahlungsmethoden für den Rechnungslink fest.
 
 In WooCommerce, PrestaShop und Shopware können Dokumente desselben Warenkorbs zu verschiedenen Zeitpunkten bestätigt werden. Bei einer 0‑€‑Bestellung können die dafür vorgesehenen Dokumente direkt nach Bestellabgabe starten. Auslieferung und Zugriff setzen die vollständige Bestätigung der Pflichtdokumente und bei einem positiven Bestellwert die Zahlung voraus.
 
-Die Einrichtung steht in den Shop-READMEs. [WooCommerce](plugins/woocommerce/README.md) · [PrestaShop 9](plugins/prestashop/README.md) · [Shopware 6.7](plugins/shopware/README.md) · [Shopify](plugins/shopify/README.md)
+Die Einrichtung steht in den Shop-READMEs. [WooCommerce](plugins/woocommerce/README.md) · [PrestaShop 9](plugins/prestashop/README.md) · [Shopware 6.7](plugins/shopware/README.md) · [Shopify](plugins/shopify/README.md) · [JTL-Shop 5.5+](plugins/jtl-shop/README.md)
 
-GitHub Actions baut alle vier Pakete. [Workflow und ZIP-Artefakte](https://github.com/Maetti79/blocksign-shop-plugins/actions/workflows/check.yml)
+GitHub Actions baut alle fünf Pakete. [Workflow und ZIP-Artefakte](https://github.com/Maetti79/blocksign-shop-plugins/actions/workflows/check.yml)
 
 ## Anwendungsfälle und Rechtsgrundlagen
 

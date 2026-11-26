@@ -44,3 +44,9 @@ jobs:
         with:
           name: blocksign-esign-shopify
           path: build/blocksign-esign-shopify.zip
+      - run: scripts/build-jtl-shop.sh
+      - run: unzip -q build/blocksign-esign-jtl-shop.zip -d build && php tests/jtl-shop-pilot.php build/blocksign_esign
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blocksign-esign-jtl-shop
+          path: build/blocksign-esign-jtl-shop.zip

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<jtlshopplugin>
+    <Name>BlockSign eSign</Name>
+    <Description>Elektronische Bestätigungen und geschützte Downloads für JTL-Shop</Description>
+    <Author>BlockSign</Author>
+    <URL>https://blocksign.io/</URL>
+    <XMLVersion>100</XMLVersion>
+    <MinShopVersion>5.5.0</MinShopVersion>
+    <PluginID>blocksign_esign</PluginID>
+    <CreateDate>2026-11-26</CreateDate>
+    <Version>0.1.0</Version>
+    <Install>
+        <FrontendLink>
+            <Link>
+                <Filename>status.php</Filename>
+                <Name>BlockSign-Status</Name>
+                <Template>status.tpl</Template>
+                <LinkGroup>hidden</LinkGroup>
+                <VisibleAfterLogin>Y</VisibleAfterLogin>
+                <PrintButton>N</PrintButton>
+                <SSL>2</SSL>
+                <LinkLanguage iso="GER">
+                    <Seo>blocksign-status</Seo>
+                    <Name>BlockSign-Status</Name>
+                    <Title>BlockSign-Status und Downloads</Title>
+                    <MetaTitle>BlockSign-Status und Downloads</MetaTitle>
+                    <MetaKeywords>BlockSign</MetaKeywords>
+                    <MetaDescription>Bestätigung und Downloads zu deiner Bestellung.</MetaDescription>
+                </LinkLanguage>
+                <LinkLanguage iso="ENG">
+                    <Seo>blocksign-order-status</Seo>
+                    <Name>BlockSign status</Name>
+                    <Title>BlockSign status and downloads</Title>
+                    <MetaTitle>BlockSign status and downloads</MetaTitle>
+                    <MetaKeywords>BlockSign</MetaKeywords>
+                    <MetaDescription>Confirmation and downloads for your order.</MetaDescription>
+                </LinkLanguage>
+            </Link>
+        </FrontendLink>
+    </Install>
+</jtlshopplugin>

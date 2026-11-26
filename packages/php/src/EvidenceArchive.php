@@ -22,7 +22,7 @@ final class EvidenceArchive
         $archive = realpath($directory);
         if (!$root || !$archive || !is_dir($archive) || !is_writable($archive)
             || $archive === $root || str_starts_with($archive, rtrim($root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR)
-            || !preg_match('/^(?:(?:woocommerce|prestashop)-[0-9]+-[0-9]+|shopware-[a-f0-9]{32})$/D', $orderKey)) {
+            || !preg_match('/^(?:(?:woocommerce|prestashop)-[0-9]+-[0-9]+|shopware-[a-f0-9]{32}|jtl-[0-9]+)$/D', $orderKey)) {
             throw new RuntimeException('Configure a writable archive directory outside of the web root.');
         }
 
