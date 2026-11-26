@@ -8,7 +8,7 @@
 2. Lege ein einfaches **virtuelles** Produkt mit gewünschtem Preis an. WooCommerces Standard-Downloadfunktion bleibt für dieses Produkt ausgeschaltet.
 3. Kopiere die Erklärung als `agreement.pdf` und das Exposé als `download.pdf` in ein Verzeichnis außerhalb des Webroots, das der PHP-Prozess lesen kann und das der Webserver auch über Aliase nicht veröffentlicht. Die Erklärung braucht Platz für das Signaturfeld an der im nächsten Schritt konfigurierten Position.
 4. Setze in `wp-config.php` die Konstanten `BLOCKSIGN_ESIGN_FILES` (absoluter Verzeichnispfad) und `BLOCKSIGN_ESIGN_API_KEY` (API-Key aus einer serverseitigen Secret-Konfiguration).
-5. Wähle unter **Einstellungen → BlockSign eSign** den Produktbereich sowie Signaturniveau, Seite und Position. Das Produkt wird einzeln und mit einer gültigen E-Mail-Adresse bestellt.
+5. Wähle unter **Einstellungen → BlockSign eSign** den Produktbereich sowie Signaturniveau, Seite und Position. Für die Signaturanfrage ist eine gültige E-Mail-Adresse erforderlich.
 
 Der Job in WooCommerce Action Scheduler lädt die Erklärung hoch, bereitet die Signaturanfrage vor, sendet die BlockSign-Einladung und prüft anschließend den Status. Nach bestätigtem Abschluss erscheint der Link in der WooCommerce-Bestellansicht beim erneuten Laden. Die Downloadroute prüft Bestellberechtigung und Signaturstatus bei jedem Aufruf. Für Gastbestellungen ist der Bestellschlüssel der Zugangsschlüssel und entsprechend vertraulich zu behandeln.
 
@@ -24,11 +24,11 @@ Unter **Protected products** wählst du für welche Produkte die Einstellung gil
 - **Products marked on their edit screen** verwendet die Checkbox **Require BlockSign eSign** unter **Produktdaten → Allgemein** des klassischen WooCommerce-Produkteditors.
 - **All eligible virtual products** gilt für geeignete virtuelle Produkte im ganzen Shop. Produkte mit einem aktiven eigenen Shop-Download bleiben außerhalb dieser Auswahl.
 
-Die Modulkonfiguration gilt für alle erfassten Produkte. Das erste Pflichtdokument und der private Download können je Produkt abweichen. Eine Bestellung umfasst im Pilot genau ein Exemplar eines geschützten Produkts. Änderungen der Zuordnung gelten für neue Bestellungen.
+Die Modulkonfiguration gilt für alle erfassten Produkte. Das erste Pflichtdokument und der private Download können je Produkt abweichen. Bestellungen können geschützte und ungeschützte Produkte kombinieren. Der Shop zeigt für jedes geschützte Produkt einen eigenen Downloadlink, sobald alle Pflichtdokumente der Bestellung bestätigt sind. Identische Dokumente mit identischen Signaturparametern werden pro Bestellung einmal angefordert. Änderungen der Zuordnung gelten für neue Bestellungen.
 
 ## Eigene PDFs je Produkt
 
-Trage im Produkteditor bei **BlockSign primary agreement PDF** und **BlockSign protected download PDF** die jeweiligen Dateinamen ein. Die Dateien müssen im privaten BlockSign-Verzeichnis liegen. Leere Felder verwenden `agreement.pdf` und `download.pdf`. Weitere Pflichtdokumente und die Signaturposition für das erste Dokument stammen aus der Modulkonfiguration.
+Trage im Produkteditor bei **BlockSign primary agreement PDF** und **BlockSign protected download PDF** die jeweiligen Dateinamen ein. Die Dateien müssen im privaten BlockSign-Verzeichnis liegen. Leere Felder verwenden `agreement.pdf` und `download.pdf`. Die Signaturposition des ersten Dokuments und zusätzliche Pflichtdokumente stammen aus der Modulkonfiguration.
 
 Neue Bestellungen speichern die Dateinamen und Dateihashes. Lass die zugehörigen Dateien für bestehende Bestellungen unverändert verfügbar. Für einen neuen Inhalt verwende einen neuen Dateinamen.
 
@@ -46,6 +46,8 @@ terms.pdf | FES | 2 | 12.5 | 40
 ```
 
 Die Felder geben Dateiname, Signaturniveau, PDF-Seite und X/Y-Koordinaten an. Verwende eindeutige PDF-Dateinamen ohne Verzeichnispfad. `agreement.pdf` und `download.pdf` sind reserviert. Die Bestellung speichert die Dokumentliste, die Signaturparameter und die Dateihashes beim Kauf. Bestehende Bestellungen behalten ihre bisherigen Anforderungen.
+
+Für zusätzliche Dokumente einer Produktkategorie nutze **Additional PDFs by product category**. Setze die Kategorie-ID an den Zeilenanfang, zum Beispiel `21 | category-terms.pdf | FES | 1 | 50 | 50`. Bei einem geschützten Produkt gelten die Dokumente seiner direkt zugeordneten Kategorien zusätzlich zu den shopweiten Dokumenten. Identische Dokumente mit identischen Einstellungen werden zusammengeführt.
 
 Der Worker startet das nächste Dokument, nachdem BlockSign das vorherige bestätigt hat. Der Shop gibt den Download erst frei, wenn alle Pflichtdokumente unterschrieben sind. Ein abgebrochener oder abgelaufener Vorgang hält die Freigabe gesperrt.
 

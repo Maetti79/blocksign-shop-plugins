@@ -5,6 +5,8 @@ use BlockSign\ESign\Gate;
 use BlockSign\ESign\EvidenceArchive;
 use BlockSign\ESign\ProductScope;
 use BlockSign\ESign\ProductFiles;
+use BlockSign\ESign\OrderFiles;
+use BlockSign\ESign\CategoryDocuments;
 use BlockSign\ESign\RequiredSignatures;
 use BlockSign\ESign\SignatureSettings;
 use BlockSign\ESign\SignatureWorkflow;
@@ -23,6 +25,8 @@ require_once __DIR__ . '/core/SignatureWorkflow.php';
 require_once __DIR__ . '/core/RequiredSignatures.php';
 require_once __DIR__ . '/core/ProductScope.php';
 require_once __DIR__ . '/core/ProductFiles.php';
+require_once __DIR__ . '/core/OrderFiles.php';
+require_once __DIR__ . '/core/CategoryDocuments.php';
 require_once __DIR__ . '/core/EvidenceArchive.php';
 
 class BlocksignEsign extends Module
@@ -34,11 +38,12 @@ class BlocksignEsign extends Module
     private const PRODUCT_FILES_PREFIX = 'BLOCKSIGN_ESIGN_PRODUCT_FILES_';
     private const SIGNATURE = 'BLOCKSIGN_ESIGN_SIGNATURE';
     private const DOCUMENTS = 'BLOCKSIGN_ESIGN_DOCUMENTS';
+    private const CATEGORY_DOCUMENTS = 'BLOCKSIGN_ESIGN_CATEGORY_DOCUMENTS';
 
     public function __construct()
     {
         $this->name = 'blocksignesign';
-        $this->version = '0.7.0';
+        $this->version = '0.8.0';
         $this->author = 'BlockSign';
         $this->tab = 'administration';
         $this->ps_versions_compliancy = ['min' => '9.0.0', 'max' => _PS_VERSION_];
@@ -166,8 +171,14 @@ class BlocksignEsign extends Module
                     throw new InvalidArgumentException('Enter one PDF per line.');
                 }
                 RequiredSignatures::parseAdditional($documents);
+                $categoryDocuments = Tools::getValue(self::CATEGORY_DOCUMENTS, '');
+                if (!is_string($categoryDocuments)) {
+                    throw new InvalidArgumentException('Enter one category document per line.');
+                }
+                CategoryDocuments::parse($categoryDocuments);
                 if (!Configuration::updateValue(self::SCOPE, json_encode($scope, JSON_THROW_ON_ERROR))
                     || !Configuration::updateValue(self::DOCUMENTS, trim($documents))
+                    || !Configuration::updateValue(self::CATEGORY_DOCUMENTS, trim($categoryDocuments))
                     || !Configuration::updateValue(self::SIGNATURE, json_encode($placement, JSON_THROW_ON_ERROR))
                     || !Configuration::updateValue(self::PRODUCT, $productId)) {
                     throw new RuntimeException('Could not save the BlockSign settings.');
@@ -190,6 +201,7 @@ class BlocksignEsign extends Module
             'blocksign_scope' => $scope['mode'],
             'blocksign_category' => $scope['category_id'],
             self::DOCUMENTS => (string) Configuration::get(self::DOCUMENTS),
+            self::CATEGORY_DOCUMENTS => (string) Configuration::get(self::CATEGORY_DOCUMENTS),
             'blocksign_level' => $settings['signature_level'],
             'blocksign_page' => $settings['page'],
             'blocksign_x' => $settings['x'],
@@ -237,6 +249,12 @@ class BlocksignEsign extends Module
                 'label' => 'Additional required PDFs',
                 'desc' => 'One private PDF per line, for example: mandate.pdf | EES | 1 | 50 | 50',
                 'rows' => 5,
+            ], [
+                'type' => 'textarea',
+                'name' => self::CATEGORY_DOCUMENTS,
+                'label' => 'Additional PDFs by product category',
+                'desc' => 'Example: 21 | mandate.pdf | EES | 1 | 50 | 50',
+                'rows' => 5,
             ]],
             'submit' => ['title' => 'Save'],
         ]]]);
@@ -265,36 +283,43 @@ class BlocksignEsign extends Module
             if (($scope['mode'] === 'product' && !$configuredProduct) || !self::matchesTiming($order, $timing)) {
                 continue;
             }
-            $items = $order->getProductsDetail();
-            $item = reset($items);
-            if (count($items) !== 1 || (int) $item['product_quantity'] !== 1) {
-                continue;
-            }
-
-            $productId = (int) $item['product_id'];
-            if ($scope['mode'] === 'product' && $productId !== $configuredProduct) {
-                continue;
-            }
-
-            $product = new Product($productId, false, null, $shopId);
-            $categories = $scope['mode'] === 'category' ? $product->getCategories() : [];
-            $flagged = $scope['mode'] === 'flagged' && self::productMarked($productId, $shopId);
             $customer = $params['customer'];
-            if (!$product->is_virtual || (int) ($item['product_attribute_id'] ?? 0) !== 0
-                || !ProductScope::matches($scope, $configuredProduct, $productId, $categories, $flagged)
-                || ProductDownload::getIdFromIdProduct($productId) || $product->getAttachments((int) $order->id_lang)
-                || (int) $customer->id !== (int) $order->id_customer || !Validate::isEmail($customer->email)) {
+            if ((int) $customer->id !== (int) $order->id_customer || !Validate::isEmail($customer->email)) {
                 continue;
             }
 
             try {
-                $state = ProductFiles::snapshot(
-                    self::productFiles($productId, $shopId),
-                    self::signatureSettings($shopId),
-                    RequiredSignatures::parseAdditional((string) Configuration::get(self::DOCUMENTS, null, null, $shopId)),
-                    self::asset(...)
-                ) + [
-                    'product_id' => $productId,
+                $products = [];
+                $placement = $additional = null;
+                $categoryDocuments = CategoryDocuments::parse((string) Configuration::get(self::CATEGORY_DOCUMENTS, null, null, $shopId));
+                foreach ($order->getProductsDetail() as $item) {
+                    $productId = (int) $item['product_id'];
+                    if (isset($products[$productId]) || ($scope['mode'] === 'product' && $productId !== $configuredProduct)) {
+                        continue;
+                    }
+                    $product = new Product($productId, false, null, $shopId);
+                    $categories = $scope['mode'] === 'category' || $categoryDocuments ? $product->getCategories() : [];
+                    $flagged = $scope['mode'] === 'flagged' && self::productMarked($productId, $shopId);
+                    if (!$product->is_virtual || (int) ($item['product_attribute_id'] ?? 0) !== 0
+                        || !ProductScope::matches($scope, $configuredProduct, $productId, $categories, $flagged)
+                        || ProductDownload::getIdFromIdProduct($productId) || $product->getAttachments((int) $order->id_lang)) {
+                        continue;
+                    }
+                    $products[$productId] = ProductFiles::snapshot(
+                        self::productFiles($productId, $shopId),
+                        $placement ??= self::signatureSettings($shopId),
+                        CategoryDocuments::forProduct(
+                            $additional ??= RequiredSignatures::parseAdditional((string) Configuration::get(self::DOCUMENTS, null, null, $shopId)),
+                            $categoryDocuments,
+                            $categories
+                        ),
+                        self::asset(...)
+                    );
+                }
+                if (!$products) {
+                    continue;
+                }
+                $state = OrderFiles::combine($products) + [
                     'timing' => $timing,
                     'signer_email' => $customer->email,
                 ];
@@ -363,10 +388,21 @@ class BlocksignEsign extends Module
                 return false;
             }
         }
-        $items = $order->getProductsDetail();
-        $item = reset($items);
-        return count($items) === 1 && (int) $item['product_id'] === $state['product_id']
-            && (int) $item['product_quantity'] === 1 && (int) $item['product_quantity_refunded'] === 0;
+        $protected = OrderFiles::downloads($state);
+        if (!$protected) {
+            return false;
+        }
+        $valid = [];
+        foreach ($order->getProductsDetail() as $item) {
+            $id = (int) $item['product_id'];
+            if (isset($protected[$id]) && (int) ($item['product_attribute_id'] ?? 0) === 0) {
+                if ((int) $item['product_quantity_refunded'] > 0 || (int) $item['product_quantity'] < 1) {
+                    return false;
+                }
+                $valid[$id] = true;
+            }
+        }
+        return count($valid) === count($protected);
     }
 
     private static function matchesTiming(Order $order, string $timing): bool

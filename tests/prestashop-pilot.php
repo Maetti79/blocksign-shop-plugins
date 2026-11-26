@@ -21,6 +21,9 @@ register_shutdown_function(static function () use ($files): void {
     unlink($files . '/mandate.pdf');
     unlink($files . '/custom-agreement.pdf');
     unlink($files . '/custom-download.pdf');
+    if (file_exists($files . '/category-terms.pdf')) {
+        unlink($files . '/category-terms.pdf');
+    }
     rmdir($files);
 });
 
@@ -64,6 +67,7 @@ class Configuration
         }
         return match ($key) {
             'BLOCKSIGN_ESIGN_PRODUCT' => 99,
+            'BLOCKSIGN_ESIGN_CATEGORY_DOCUMENTS' => $GLOBALS['category_documents'] ?? '',
             'BLOCKSIGN_ESIGN_SCOPE' => $GLOBALS['configured_scope'] ?? '',
             'BLOCKSIGN_ESIGN_DOCUMENTS' => 'mandate.pdf | FES | 3 | 25 | 40',
             'BLOCKSIGN_ESIGN_SIGNATURE' => '{"signature_level":"qes","page":2,"x":12.5,"y":0}',
@@ -99,15 +103,22 @@ class Order
         }
     }
 
+    public array $items = [];
+
     public function getProductsDetail(): array
     {
-        return [['product_id' => '99', 'product_quantity' => '1', 'product_quantity_refunded' => '0']];
+        return $this->items ?: [['product_id' => '99', 'product_quantity' => '1', 'product_quantity_refunded' => '0']];
     }
 }
 
 class Product
 {
-    public bool $is_virtual = true;
+    public bool $is_virtual;
+
+    public function __construct(int $id)
+    {
+        $this->is_virtual = $id !== 100;
+    }
 
     public function getCategories(): array { return ['21']; }
     public function getAttachments(int $language): array { return []; }
@@ -262,7 +273,7 @@ check(Db::$row === [], 'unrelated category matched');
 
 $configured_scope = '{"mode":"category","category_id":21}';
 $module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
-check((json_decode(Db::$row['state'], true)['product_id'] ?? 0) === 99, 'configured category did not match');
+check(isset(json_decode(Db::$row['state'], true)['downloads'][99]), 'configured category did not match');
 
 Db::$row = [];
 $configured_scope = '{"mode":"all","category_id":0}';
@@ -271,7 +282,7 @@ $module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $cust
 check(Db::$row === [], 'catalog-wide scope selected a native download');
 ProductDownload::$active = false;
 $module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
-check((json_decode(Db::$row['state'], true)['product_id'] ?? 0) === 99, 'catalog-wide scope did not select eligible product');
+check(isset(json_decode(Db::$row['state'], true)['downloads'][99]), 'catalog-wide scope did not select eligible product');
 echo "PASS PrestaShop product scopes\n";
 
 require ($argv[1] ?? 'build/blocksignesign') . '/upgrade/upgrade-0.6.0.php';
@@ -301,7 +312,7 @@ $builder = new class {
 $module->hookActionProductFormBuilderModifier(['id' => 99, 'form_builder' => $builder, 'options' => ['shop_id' => 2]]);
 check($builder->checkbox['blocksign_esign_required']['data'] === true, 'checkbox did not load the saved flag');
 $module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
-check((json_decode(Db::$row['state'], true)['product_id'] ?? 0) === 99, 'saved product checkbox did not select the product');
+check(isset(json_decode(Db::$row['state'], true)['downloads'][99]), 'saved product checkbox did not select the product');
 
 $module->hookActionAfterUpdateProductFormHandler([
     'id' => 99, 'form_data' => ['options' => ['blocksign_esign_required' => false]],
@@ -325,6 +336,33 @@ $module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $cust
 $state = json_decode(Db::$row['state'], true);
 check($state['documents'][0]['file'] === 'custom-agreement.pdf', 'custom agreement was not selected');
 check($state['documents'][1]['file'] === 'mandate.pdf', 'additional documents were lost');
-check($state['download_file'] === 'custom-download.pdf' && $state['download_hash'] === hash('sha256', '%PDF custom download'),
+check($state['downloads'][99]['file'] === 'custom-download.pdf' && $state['downloads'][99]['hash'] === hash('sha256', '%PDF custom download'),
     'custom download was not pinned at checkout');
 echo "PASS PrestaShop product-specific PDFs\n";
+
+$configured_scope = '{"mode":"all","category_id":0}';
+$order->items = [
+    ['product_id' => '99', 'product_quantity' => '1', 'product_quantity_refunded' => '0'],
+    ['product_id' => '100', 'product_quantity' => '1', 'product_quantity_refunded' => '0'],
+    ['product_id' => '101', 'product_quantity' => '2', 'product_quantity_refunded' => '0'],
+];
+Db::$row = [];
+$module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
+$state = json_decode(Db::$row['state'], true);
+check(array_keys($state['downloads']) === [99, 101], 'mixed cart selected the wrong products');
+check(count($state['documents']) === 3, 'the two agreements and shared mandate were not deduplicated correctly');
+check(BlocksignEsign::orderEligible($order, $state), 'valid mixed order was rejected');
+check(\BlockSign\ESign\OrderFiles::download($state, 100) === null, 'unprotected line has a private download');
+$order->items[2]['product_quantity_refunded'] = '1';
+check(!BlocksignEsign::orderEligible($order, $state), 'refunded protected line remained eligible');
+echo "PASS PrestaShop mixed cart and shared-document deduplication\n";
+
+file_put_contents($files . '/category-terms.pdf', '%PDF category terms');
+$category_documents = '21 | category-terms.pdf | FES | 1 | 50 | 50';
+Db::$row = [];
+$order = new Order(42);
+$module->hookActionValidateOrderAfter(['orders' => [$order], 'customer' => $customer]);
+$state = json_decode(Db::$row['state'], true);
+check(array_column($state['documents'], 'file') === ['custom-agreement.pdf', 'mandate.pdf', 'category-terms.pdf'],
+    'matching category document was not included');
+echo "PASS PrestaShop category-specific documents\n";

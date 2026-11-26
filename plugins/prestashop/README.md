@@ -5,7 +5,7 @@
 ## Installation und Betrieb
 
 1. Erstelle die Modul-ZIP mit `scripts/build-prestashop.sh` oder lade das Artefakt aus GitHub Actions herunter. Installiere darin `blocksign-esign-prestashop.zip` über den Modulmanager eines **PrestaShop-9-Testshops**.
-2. Lege ein einzelnes virtuelles Produkt mit gewünschtem Preis an. Hinterlege dafür weder einen PrestaShop-Download noch einen öffentlich erreichbaren Anhang. Wähle den Produktbereich in der Modulkonfiguration. Der Pilot verarbeitet Bestellungen mit genau einem Exemplar dieses Produkts.
+2. Lege ein einzelnes virtuelles Produkt mit gewünschtem Preis an. Hinterlege dafür weder einen PrestaShop-Download noch einen öffentlich erreichbaren Anhang. Wähle den Produktbereich in der Modulkonfiguration.
 3. Lege `agreement.pdf` und `download.pdf` in einem privaten Verzeichnis außerhalb des Webroots ab. Setze `BLOCKSIGN_ESIGN_FILES` auf diesen absoluten Pfad, sowohl für den Web-PHP-Prozess als auch für den Worker. Wähle in der Modulkonfiguration außerdem Signaturniveau, PDF-Seite und Position.
 4. Stelle dem Worker `BLOCKSIGN_ESIGN_API_KEY` über die Secret-Konfiguration des Servers bereit. Lasse jede Minute `php /pfad/zum/shop/modules/blocksignesign/worker.php` unter dem Shop-Benutzer laufen. Das CLI-PHP benötigt cURL.
 
@@ -22,11 +22,11 @@ Unter **Protected products** wählst du für welche Produkte die Einstellung gil
 - **Products marked on their edit screen** verwendet die Checkbox **Require BlockSign eSign** unter **Optionen** des PrestaShop-Produkteditors. Wähle bei Multishop zuerst den einzelnen Shop im Backoffice aus.
 - **All eligible virtual products** gilt für geeignete virtuelle Produkte im ganzen Shop. Produkte mit einem aktiven eigenen Shop-Download bleiben außerhalb dieser Auswahl.
 
-Die Modulkonfiguration gilt für alle erfassten Produkte. Das erste Pflichtdokument und der private Download können je Produkt abweichen. Eine Bestellung umfasst im Pilot genau ein Exemplar eines geschützten Produkts. Änderungen der Zuordnung gelten für neue Bestellungen.
+Die Modulkonfiguration gilt für alle erfassten Produkte. Das erste Pflichtdokument und der private Download können je Produkt abweichen. Bestellungen können geschützte und ungeschützte Produkte kombinieren. Der Shop zeigt für jedes geschützte Produkt einen eigenen Downloadlink, sobald alle Pflichtdokumente der Bestellung bestätigt sind. Identische Dokumente mit identischen Signaturparametern werden pro Bestellung einmal angefordert. Änderungen der Zuordnung gelten für neue Bestellungen.
 
 ## Eigene PDFs je Produkt
 
-Trage im Produkteditor bei **BlockSign primary agreement PDF** und **BlockSign protected download PDF** die jeweiligen Dateinamen ein. Die Dateien müssen im privaten BlockSign-Verzeichnis liegen. Leere Felder verwenden `agreement.pdf` und `download.pdf`. Weitere Pflichtdokumente und die Signaturposition für das erste Dokument stammen aus der Modulkonfiguration.
+Trage im Produkteditor bei **BlockSign primary agreement PDF** und **BlockSign protected download PDF** die jeweiligen Dateinamen ein. Die Dateien müssen im privaten BlockSign-Verzeichnis liegen. Leere Felder verwenden `agreement.pdf` und `download.pdf`. Die Signaturposition des ersten Dokuments und zusätzliche Pflichtdokumente stammen aus der Modulkonfiguration.
 
 Neue Bestellungen speichern die Dateinamen und Dateihashes. Lass die zugehörigen Dateien für bestehende Bestellungen unverändert verfügbar. Für einen neuen Inhalt verwende einen neuen Dateinamen.
 
@@ -44,6 +44,8 @@ terms.pdf | FES | 2 | 12.5 | 40
 ```
 
 Die Felder geben Dateiname, Signaturniveau, PDF-Seite und X/Y-Koordinaten an. Verwende eindeutige PDF-Dateinamen ohne Verzeichnispfad. `agreement.pdf` und `download.pdf` sind reserviert. Die Bestellung speichert die Dokumentliste, die Signaturparameter und die Dateihashes beim Kauf. Bestehende Bestellungen behalten ihre bisherigen Anforderungen.
+
+Für zusätzliche Dokumente einer Produktkategorie nutze **Additional PDFs by product category**. Setze die Kategorie-ID an den Zeilenanfang, zum Beispiel `21 | category-terms.pdf | FES | 1 | 50 | 50`. Bei einem geschützten Produkt gelten die Dokumente seiner direkt zugeordneten Kategorien zusätzlich zu den shopweiten Dokumenten. Identische Dokumente mit identischen Einstellungen werden zusammengeführt.
 
 Der Worker startet das nächste Dokument, nachdem BlockSign das vorherige bestätigt hat. Der Shop gibt den Download erst frei, wenn alle Pflichtdokumente unterschrieben sind. Ein abgebrochener oder abgelaufener Vorgang hält die Freigabe gesperrt.
 

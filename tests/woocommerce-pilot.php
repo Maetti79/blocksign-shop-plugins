@@ -18,6 +18,9 @@ register_shutdown_function(static function (): void {
     unlink(BLOCKSIGN_ESIGN_FILES . '/download.pdf');
     unlink(BLOCKSIGN_ESIGN_FILES . '/custom-agreement.pdf');
     unlink(BLOCKSIGN_ESIGN_FILES . '/custom-download.pdf');
+    if (file_exists(BLOCKSIGN_ESIGN_FILES . '/category-terms.pdf')) {
+        unlink(BLOCKSIGN_ESIGN_FILES . '/category-terms.pdf');
+    }
     rmdir(BLOCKSIGN_ESIGN_FILES);
 });
 
@@ -39,7 +42,8 @@ class WC_Order
     public function get_billing_email(): string { return $this->email; }
     public function get_checkout_order_received_url(): string { return 'https://shop.example/received/42'; }
     public function get_checkout_payment_url(): string { return 'https://shop.example/pay/42'; }
-    public function get_items(): array { return [new WC_Order_Item()]; }
+    public array $items = [];
+    public function get_items(): array { return $this->items ?: [new WC_Order_Item()]; }
     public string $method = 'stripe';
     public function set_payment_method(string $method): void { $this->method = $method; }
     public function get_meta(string $key): array { return $this->state; }
@@ -66,7 +70,8 @@ class WC_Order
 class WC_Product
 {
     public function is_type(string $type): bool { return $type === 'simple'; }
-    public function is_virtual(): bool { return true; }
+    public function __construct(private bool $virtual = true) {}
+    public function is_virtual(): bool { return $this->virtual; }
     public static bool $downloadable = false;
     public static array $metadata = [];
     public function get_meta(string $key): string { return self::$metadata[$key] ?? ''; }
@@ -78,9 +83,11 @@ class WC_Product
 
 class WC_Order_Item
 {
-    public function get_product_id(): int { return 7; }
+    public function __construct(private int $productId = 7, private bool $virtual = true) {}
+    public function get_product_id(): int { return $this->productId; }
+    public function get_variation_id(): int { return 0; }
     public function get_quantity(): int { return 1; }
-    public function get_product(): WC_Product { return new WC_Product(); }
+    public function get_product(): WC_Product { return new WC_Product($this->virtual); }
 }
 
 class CheckoutInterrupted extends RuntimeException
@@ -105,6 +112,7 @@ function get_option(string $name, mixed $default = false): mixed
 {
     return match ($name) {
         'blocksign_esign_product' => 7,
+        'blocksign_esign_category_documents' => $GLOBALS['category_documents'] ?? '',
         'blocksign_esign_scope' => $GLOBALS['configured_scope'] ?? $default,
         'blocksign_esign_paid_timing' => $GLOBALS['configured_timing'],
         default => $default,
@@ -315,7 +323,7 @@ check($order->state === [], 'unrelated category matched');
 
 $configured_scope = ['mode' => 'category', 'category_id' => 21];
 $hooks['woocommerce_checkout_create_order']($order);
-check(($order->state['product_id'] ?? 0) === 7, 'configured category did not match');
+check(isset($order->state['downloads'][7]), 'configured category did not match');
 $existing = $order->state;
 $configured_scope['category_id'] = 22;
 $hooks['woocommerce_checkout_create_order']($order);
@@ -328,7 +336,7 @@ $hooks['woocommerce_checkout_create_order']($order);
 check($order->state === [], 'catalog-wide scope selected a native download');
 WC_Product::$downloadable = false;
 $hooks['woocommerce_checkout_create_order']($order);
-check(($order->state['product_id'] ?? 0) === 7, 'catalog-wide scope did not select eligible product');
+check(isset($order->state['downloads'][7]), 'catalog-wide scope did not select eligible product');
 echo "PASS WooCommerce product scopes\n";
 
 $configured_scope = ['mode' => 'flagged', 'category_id' => 0];
@@ -342,7 +350,7 @@ $hooks['woocommerce_admin_process_product_object']($product);
 unset($_POST['_blocksign_esign_required']);
 $hooks['woocommerce_admin_process_product_object']($product);
 $hooks['woocommerce_checkout_create_order']($order);
-check(($order->state['product_id'] ?? 0) === 7, 'saved product checkbox did not select the product');
+check(isset($order->state['downloads'][7]), 'saved product checkbox did not select the product');
 $existing = $order->state;
 
 $_POST['_blocksign_esign_required'] = 'no';
@@ -365,6 +373,24 @@ unset($_POST['_blocksign_esign_agreement_file'], $_POST['_blocksign_esign_downlo
 $order = new WC_Order([]);
 $hooks['woocommerce_checkout_create_order']($order);
 check($order->state['documents'][0]['file'] === 'custom-agreement.pdf', 'custom agreement was not selected');
-check($order->state['download_file'] === 'custom-download.pdf' && $order->state['download_hash'] === hash('sha256', '%PDF custom download'),
+check($order->state['downloads'][7]['file'] === 'custom-download.pdf' && $order->state['downloads'][7]['hash'] === hash('sha256', '%PDF custom download'),
     'custom download was not pinned at checkout');
 echo "PASS WooCommerce product-specific PDFs\n";
+
+$configured_scope = ['mode' => 'all', 'category_id' => 0];
+$order = new WC_Order([]);
+$order->items = [new WC_Order_Item(7), new WC_Order_Item(8, false), new WC_Order_Item(9)];
+$hooks['woocommerce_checkout_create_order']($order);
+check(array_keys($order->state['downloads']) === [7, 9], 'mixed cart selected the wrong protected products');
+check(count($order->state['documents']) === 1, 'shared agreement was duplicated');
+check(\BlockSign\ESign\OrderFiles::download($order->state, 8) === null, 'unprotected product has a private download');
+check(\BlockSign\ESign\OrderFiles::download($order->state, 0) === null, 'multiple downloads require a product ID');
+echo "PASS WooCommerce mixed cart and shared-document deduplication\n";
+
+file_put_contents(BLOCKSIGN_ESIGN_FILES . '/category-terms.pdf', '%PDF category terms');
+$category_documents = '21 | category-terms.pdf | FES | 1 | 50 | 50';
+$order = new WC_Order([]);
+$hooks['woocommerce_checkout_create_order']($order);
+check(array_column($order->state['documents'], 'file') === ['custom-agreement.pdf', 'category-terms.pdf'],
+    'matching category document was not included');
+echo "PASS WooCommerce category-specific documents\n";

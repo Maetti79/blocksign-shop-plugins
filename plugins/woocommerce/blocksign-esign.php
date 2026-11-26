@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BlockSign eSign for WooCommerce
  * Description: Release a free virtual product after BlockSign confirms its signature.
- * Version: 0.8.0
+ * Version: 0.9.0
  * Requires PHP: 8.1
  * Requires Plugins: woocommerce
  * License: GPL-3.0-or-later
@@ -17,6 +17,8 @@ use BlockSign\ESign\Gate;
 use BlockSign\ESign\EvidenceArchive;
 use BlockSign\ESign\ProductScope;
 use BlockSign\ESign\ProductFiles;
+use BlockSign\ESign\OrderFiles;
+use BlockSign\ESign\CategoryDocuments;
 use BlockSign\ESign\RequiredSignatures;
 use BlockSign\ESign\SignatureSettings;
 use BlockSign\ESign\SignatureWorkflow;
@@ -37,6 +39,8 @@ require_once __DIR__ . '/core/SignatureWorkflow.php';
 require_once __DIR__ . '/core/RequiredSignatures.php';
 require_once __DIR__ . '/core/ProductScope.php';
 require_once __DIR__ . '/core/ProductFiles.php';
+require_once __DIR__ . '/core/OrderFiles.php';
+require_once __DIR__ . '/core/CategoryDocuments.php';
 require_once __DIR__ . '/core/EvidenceArchive.php';
 
 const META = '_blocksign_esign';
@@ -91,6 +95,21 @@ add_action('admin_init', static function (): void {
             }
         },
     ]);
+    register_setting('blocksign_esign', 'blocksign_esign_category_documents', [
+        'type' => 'string',
+        'sanitize_callback' => static function ($value): string {
+            try {
+                if (!is_string($value)) {
+                    throw new InvalidArgumentException('Enter one category document per line.');
+                }
+                CategoryDocuments::parse($value);
+                return trim($value);
+            } catch (InvalidArgumentException $error) {
+                add_settings_error('blocksign_esign_category_documents', 'invalid_category_documents', $error->getMessage());
+                return (string) get_option('blocksign_esign_category_documents', '');
+            }
+        },
+    ]);
     register_setting('blocksign_esign', 'blocksign_esign_scope', [
         'type' => 'array',
         'sanitize_callback' => static function ($value): array {
@@ -140,6 +159,8 @@ add_action('admin_menu', static function (): void {
         }
         printf('<p><label for="blocksign-esign-documents">Additional required PDFs</label><br><textarea id="blocksign-esign-documents" name="blocksign_esign_documents" rows="5" cols="70" aria-describedby="blocksign-documents-help">%s</textarea><br><span id="blocksign-documents-help">One private PDF per line, for example: mandate.pdf | EES | 1 | 50 | 50</span></p>',
             esc_textarea(get_option('blocksign_esign_documents', '')));
+        printf('<p><label for="blocksign-category-documents">Additional PDFs by product category</label><br><textarea id="blocksign-category-documents" name="blocksign_esign_category_documents" rows="5" cols="70">%s</textarea><br>Example: 21 | mandate.pdf | EES | 1 | 50 | 50</p>',
+            esc_textarea(get_option('blocksign_esign_category_documents', '')));
         submit_button();
         echo '</form></div>';
     });
@@ -211,12 +232,39 @@ function asset(string $name): string
 function snapshot(WC_Order $order): void
 {
     $existing = $order->get_meta(META);
-    $scope = $existing ? ProductScope::DEFAULTS : product_scope();
-    $configuredProduct = $existing['product_id'] ?? configured_product();
     $items = $order->get_items();
+    $cart = [];
     foreach ($items as $item) {
-        $productId = $item->get_product_id();
-        if ($scope['mode'] === 'product' && !ProductScope::matches($scope, $configuredProduct, $productId)) {
+        $cart[] = [(int) $item->get_product_id(), (int) $item->get_variation_id(), (int) $item->get_quantity()];
+    }
+    sort($cart);
+    $total = (float) $order->get_total();
+
+    if ($existing) {
+        $previousCart = $existing['cart'] ?? [[(int) $existing['product_id'], 0, 1]];
+        if ($previousCart !== $cart) {
+            throw new RuntimeException('The protected order items cannot be changed.');
+        }
+        $timing = $existing['timing'] ?? 'without_payment';
+        if ($total < 0 || ($timing === 'without_payment') !== ($total === 0.0)
+            || strcasecmp($existing['signer_email'], $order->get_billing_email()) !== 0) {
+            throw new RuntimeException('The protected order payment requirement and email cannot be changed.');
+        }
+        if ($timing !== 'without_payment' && $order->get_payment_method() === 'cod') {
+            throw new RuntimeException('Cash on delivery is unavailable for the protected PDF.');
+        }
+        if ($timing === 'before_payment' && !payment_allowed($order, $existing)) {
+            $order->set_payment_method('');
+        }
+        return;
+    }
+
+    $scope = product_scope();
+    $configuredProduct = configured_product();
+    $products = [];
+    foreach ($items as $item) {
+        $id = (int) $item->get_product_id();
+        if ($scope['mode'] === 'product' && !ProductScope::matches($scope, $configuredProduct, $id)) {
             continue;
         }
         $product = $item->get_product();
@@ -225,59 +273,49 @@ function snapshot(WC_Order $order): void
         $categories = $scope['mode'] === 'category' && $eligible ? $product->get_category_ids() : [];
         $flagged = $scope['mode'] === 'flagged' && $eligible && $product->get_meta(PRODUCT_FLAG) === 'yes';
         if ($scope['mode'] !== 'product'
-            && (!$eligible || !ProductScope::matches($scope, $configuredProduct, $productId, $categories, $flagged))) {
+            && (!$eligible || !ProductScope::matches($scope, $configuredProduct, $id, $categories, $flagged))) {
             continue;
         }
-
-        if (!$eligible || count($items) !== 1 || $item->get_quantity() !== 1
-            || (float) $order->get_total() < 0.0 || !is_email($order->get_billing_email())) {
-            throw new RuntimeException('The protected product must be ordered alone as a virtual item with a valid email address.');
+        if (!$eligible) {
+            throw new RuntimeException('The BlockSign product must be a simple virtual product without a native download.');
         }
-
-        $storedTiming = $existing['timing'] ?? ($existing ? 'without_payment' : paid_timing());
-        $timing = (float) $order->get_total() > 0.0 ? $storedTiming : 'without_payment';
-        if ($timing !== 'without_payment' && $order->get_payment_method() === 'cod') {
-            throw new RuntimeException('Cash on delivery is unavailable for the protected PDF.');
-        }
-        if ($existing) {
-            if (($storedTiming === 'without_payment') !== ((float) $order->get_total() === 0.0)) {
-                throw new RuntimeException('The protected order payment requirement cannot be changed.');
-            }
-            if (strcasecmp($existing['signer_email'], $order->get_billing_email()) !== 0) {
-                throw new RuntimeException('The protected order email cannot be changed.');
-            }
-            if ($timing === 'before_payment' && !payment_allowed($order, $existing)) {
-                $order->set_payment_method('');
-            }
-            return;
-        }
-
-        if (!defined('BLOCKSIGN_ESIGN_API_KEY') || !BLOCKSIGN_ESIGN_API_KEY) {
-            throw new RuntimeException('BlockSign is not configured.');
-        }
-
-        $files = ProductFiles::snapshot(
+        $products[$id] = $product;
+    }
+    if (!$products) {
+        return;
+    }
+    if ($total < 0 || !is_email($order->get_billing_email())) {
+        throw new RuntimeException('The protected order requires a valid email address and a non-negative total.');
+    }
+    $timing = $total > 0 ? paid_timing() : 'without_payment';
+    if ($timing !== 'without_payment' && $order->get_payment_method() === 'cod') {
+        throw new RuntimeException('Cash on delivery is unavailable for the protected PDF.');
+    }
+    if (!defined('BLOCKSIGN_ESIGN_API_KEY') || !BLOCKSIGN_ESIGN_API_KEY) {
+        throw new RuntimeException('BlockSign is not configured.');
+    }
+    $placement = signature_settings();
+    $additional = RequiredSignatures::parseAdditional(get_option('blocksign_esign_documents', ''));
+    $categoryDocuments = CategoryDocuments::parse(get_option('blocksign_esign_category_documents', ''));
+    foreach ($products as $id => $product) {
+        $products[$id] = ProductFiles::snapshot(
             [
                 'agreement' => $product->get_meta('_blocksign_esign_agreement_file'),
                 'download' => $product->get_meta('_blocksign_esign_download_file'),
             ],
-            signature_settings(),
-            RequiredSignatures::parseAdditional(get_option('blocksign_esign_documents', '')),
+            $placement,
+            CategoryDocuments::forProduct($additional, $categoryDocuments, $categoryDocuments ? $product->get_category_ids() : []),
             asset(...)
         );
-        $order->update_meta_data(META, $files + [
-            'product_id' => $productId,
-            'timing' => $timing,
-            'signer_email' => $order->get_billing_email(),
-        ]);
-        if ($timing === 'before_payment') {
-            // Suppress gateway instructions until the buyer actually submits the order-pay form.
-            $order->set_payment_method('');
-        }
-        return;
     }
-    if ($existing) {
-        throw new RuntimeException('The protected order product cannot be changed.');
+    $order->update_meta_data(META, OrderFiles::combine($products) + [
+        'cart' => $cart,
+        'timing' => $timing,
+        'signer_email' => $order->get_billing_email(),
+    ]);
+    if ($timing === 'before_payment') {
+        // Suppress gateway instructions until the buyer actually submits the order-pay form.
+        $order->set_payment_method('');
     }
 }
 
@@ -291,7 +329,7 @@ add_action('woocommerce_store_api_checkout_order_processed', static function (WC
         }
         $order->save_meta_data();
         enqueue($order);
-    } catch (RuntimeException $error) {
+    } catch (RuntimeException | InvalidArgumentException $error) {
         throw new \Automattic\WooCommerce\StoreApi\Exceptions\RouteException(
             'blocksign_checkout', $error->getMessage(), 400
         );
@@ -493,12 +531,15 @@ add_action('woocommerce_order_details_after_order_table', static function (WC_Or
             : '<p>BlockSign: the download is locked until all required signatures are confirmed.</p>';
         return;
     }
-    $url = add_query_arg([
-        'action' => 'blocksign_esign_download',
-        'order' => $order->get_id(),
-        'key' => $order->get_order_key(),
-    ], admin_url('admin-post.php'));
-    printf('<p><a href="%s">Download PDF</a></p>', esc_url($url));
+    foreach (OrderFiles::downloads($state) as $product => $file) {
+        $url = add_query_arg([
+            'action' => 'blocksign_esign_download',
+            'order' => $order->get_id(),
+            'key' => $order->get_order_key(),
+            'product' => $product,
+        ], admin_url('admin-post.php'));
+        printf('<p><a href="%s">Download %s</a></p>', esc_url($url), esc_html($file['file']));
+    }
 });
 
 function download(): void
@@ -516,15 +557,21 @@ function download(): void
         wp_die('Download unavailable.', '', ['response' => 404]);
     }
 
+    $product = filter_var($_GET['product'] ?? 0, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+    $download = $product === false ? null : OrderFiles::download($state, $product);
+    if (!$download) {
+        wp_die('Download unavailable.', '', ['response' => 404]);
+    }
+
     try {
-        $file = asset($state['download_file'] ?? ProductFiles::DEFAULTS['download']);
+        $file = asset($download['file']);
         $stream = fopen($file, 'rb');
         if ($stream === false) {
             throw new RuntimeException('Download could not be opened.');
         }
         $hash = hash_init('sha256');
         hash_update_stream($hash, $stream);
-        if (!hash_equals($state['download_hash'], hash_final($hash)) || !rewind($stream)) {
+        if (!hash_equals($download['hash'], hash_final($hash)) || !rewind($stream)) {
             fclose($stream);
             throw new RuntimeException('Download does not match the order.');
         }

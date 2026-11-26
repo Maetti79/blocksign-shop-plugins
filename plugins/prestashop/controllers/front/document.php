@@ -1,5 +1,7 @@
 <?php
 
+use BlockSign\ESign\OrderFiles;
+
 if (!defined('_PS_VERSION_')) {
     exit;
 }
@@ -44,22 +46,30 @@ class BlocksignEsignDocumentModuleFrontController extends ModuleFrontController
         }
         $allowed = BlocksignEsign::downloadAllowed($order, $state);
         if (Tools::getValue('download') === '1') {
-            if (!$allowed) {
+            $product = filter_var(Tools::getValue('product', 0), FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+            $download = $product === false ? null : OrderFiles::download($state, $product);
+            if (!$allowed || !$download) {
                 $this->unavailable();
             }
-            $this->download($state['download_file'] ?? 'download.pdf', $state['download_hash']);
+            $this->download($download['file'], $download['hash']);
         }
 
-        $url = $this->context->link->getModuleLink($this->module->name, 'document', [
-            'order' => $orderId,
-            'token' => $token,
-            'download' => '1',
-        ], true);
-        $message = $allowed
-            ? '<a href="' . BlocksignEsign::escape($url) . '">Download PDF</a>'
-            : ((int) $row['next_attempt'] > 0
-                ? 'Your download will be available here after all required signatures are confirmed. Check your email for the invitations and reload this page after signing.'
-                : 'The download is locked. Contact the shop for help with this order.');
+        $message = (int) $row['next_attempt'] > 0
+            ? 'Your download will be available here after all required signatures are confirmed. Check your email for the invitations and reload this page after signing.'
+            : 'The download is locked. Contact the shop for help with this order.';
+        if ($allowed) {
+            $links = [];
+            foreach (OrderFiles::downloads($state) as $product => $file) {
+                $url = $this->context->link->getModuleLink($this->module->name, 'document', [
+                    'order' => $orderId,
+                    'token' => $token,
+                    'download' => '1',
+                    'product' => $product,
+                ], true);
+                $links[] = '<a href="' . BlocksignEsign::escape($url) . '">Download ' . BlocksignEsign::escape($file['file']) . '</a>';
+            }
+            $message = implode('<br>', $links);
+        }
 
         if (!BlocksignEsign::paymentReady($order, $state)) {
             $message = 'The download is locked while payment is unconfirmed.';
