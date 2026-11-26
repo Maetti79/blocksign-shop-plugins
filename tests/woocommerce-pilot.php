@@ -11,9 +11,11 @@ define('BLOCKSIGN_ESIGN_FILES', sys_get_temp_dir() . '/blocksign-test-' . bin2he
 define('PLUGIN_PATH', $argv[1] ?? __DIR__ . '/../plugins/woocommerce');
 mkdir(BLOCKSIGN_ESIGN_FILES, 0700);
 file_put_contents(BLOCKSIGN_ESIGN_FILES . '/agreement.pdf', '%PDF-mock agreement');
+file_put_contents(BLOCKSIGN_ESIGN_FILES . '/download.pdf', '%PDF-mock download');
 
 register_shutdown_function(static function (): void {
     unlink(BLOCKSIGN_ESIGN_FILES . '/agreement.pdf');
+    unlink(BLOCKSIGN_ESIGN_FILES . '/download.pdf');
     rmdir(BLOCKSIGN_ESIGN_FILES);
 });
 
@@ -22,14 +24,22 @@ class WC_Order
     public float $total = 0;
     public float $refunded = 0;
     public bool $paid = false;
+    public string $email = 'customer@example.com';
     public ?DateTimeImmutable $paidAt = null;
 
     public function get_total(): float { return $this->total; }
     public function get_total_refunded(): float { return $this->refunded; }
     public function is_paid(): bool { return $this->paid; }
     public function get_date_paid(): ?DateTimeImmutable { return $this->paidAt; }
-    public function get_payment_method(): string { return 'stripe'; }
+    public function get_payment_method(): string { return $this->method; }
     public function get_id(): int { return 42; }
+    public function needs_payment(): bool { return $this->total > 0 && !$this->paid; }
+    public function get_billing_email(): string { return $this->email; }
+    public function get_checkout_order_received_url(): string { return 'https://shop.example/received/42'; }
+    public function get_checkout_payment_url(): string { return 'https://shop.example/pay/42'; }
+    public function get_items(): array { return [new WC_Order_Item()]; }
+    public string $method = 'stripe';
+    public function set_payment_method(string $method): void { $this->method = $method; }
     public function get_meta(string $key): array { return $this->state; }
 
     public function __construct(public array $state)
@@ -49,6 +59,75 @@ class WC_Order
     public function save_meta_data(): void
     {
     }
+}
+
+class WC_Product
+{
+    public function is_type(string $type): bool { return $type === 'simple'; }
+    public function is_virtual(): bool { return true; }
+    public function is_downloadable(): bool { return false; }
+}
+
+class WC_Order_Item
+{
+    public function get_product_id(): int { return 7; }
+    public function get_quantity(): int { return 1; }
+    public function get_product(): WC_Product { return new WC_Product(); }
+}
+
+class CheckoutInterrupted extends RuntimeException
+{
+    public function __construct(public array $payload)
+    {
+        parent::__construct();
+    }
+}
+
+class RouteError extends RuntimeException
+{
+    public function __construct(string $error, string $message, int $status)
+    {
+        parent::__construct($message, $status);
+    }
+}
+
+class_alias(RouteError::class, 'Automattic\WooCommerce\StoreApi\Exceptions\RouteException');
+
+function get_option(string $name, mixed $default = false): mixed
+{
+    return match ($name) {
+        'blocksign_esign_product' => 7,
+        'blocksign_esign_paid_timing' => $GLOBALS['configured_timing'],
+        default => $default,
+    };
+}
+
+function absint(int $value): int { return abs($value); }
+function is_email(string $value): bool { return filter_var($value, FILTER_VALIDATE_EMAIL) !== false; }
+function wp_doing_ajax(): bool { return true; }
+function esc_url(string $value): string { return $value; }
+
+function wp_send_json(array $payload): never
+{
+    throw new CheckoutInterrupted($payload);
+}
+
+function wp_die(string $message, string $title, array $options): never
+{
+    throw new CheckoutInterrupted(['status' => $options['response']]);
+}
+
+function WC(): object
+{
+    return (object) ['session' => new class {
+        public function set(string $key, int $id): void
+        {
+            $GLOBALS['checkout_session'][$key] = $id;
+        }
+        public function save_data(): void
+        {
+        }
+    }];
 }
 
 function add_action(string $hook, callable $callback, int $priority = 10, int $args = 1): void
@@ -168,3 +247,53 @@ check(download_allowed($order, $order->state), 'paid and signed download remains
 $order->refunded = 1;
 check(!download_allowed($order, $order->state), 'a refund did not revoke the download');
 echo "PASS WooCommerce payment and download gates\n";
+
+$configured_timing = 'before_payment';
+$queued = [];
+$order = new WC_Order([]);
+$order->total = 10;
+
+try {
+    $hooks['woocommerce_store_api_checkout_order_processed']($order);
+    check(false, 'checkout blocks cannot start a before-payment order');
+} catch (RouteError $error) {
+    check($error->getCode() === 400 && $queued === [], 'checkout blocks was not stopped before payment');
+}
+
+$order = new WC_Order([]);
+$order->total = 10;
+$hooks['woocommerce_checkout_create_order']($order);
+check($order->state['timing'] === 'before_payment' && $order->method === '', 'classic checkout did not store the prepayment mode');
+try {
+    $hooks['woocommerce_checkout_order_processed'](42, [], $order);
+    check(false, 'classic checkout would invoke the gateway without signatures');
+} catch (CheckoutInterrupted $redirect) {
+    check($redirect->payload['redirect'] === $order->get_checkout_order_received_url() && count($queued) === 1,
+        'classic checkout did not schedule signing and redirect to status');
+}
+check(!download_allowed($order, $order->state), 'prepayment order has no download');
+try {
+    $hooks['woocommerce_before_pay_action']($order);
+    check(false, 'direct order-pay request bypassed signing');
+} catch (CheckoutInterrupted $response) {
+    check($response->payload['status'] === 409, 'expected an order-pay conflict');
+}
+
+$order->state['documents'][0]['completed'] = true;
+ob_start();
+$hooks['woocommerce_order_details_after_order_table']($order);
+check(str_contains(ob_get_clean(), $order->get_checkout_payment_url()), 'payment link missing after signature');
+$hooks['woocommerce_before_pay_action']($order);
+check(!download_allowed($order, $order->state), 'signature without payment released the download');
+$order->email = 'changed@example.com';
+try {
+    $hooks['woocommerce_before_pay_action']($order);
+    check(false, 'a changed signer bypassed the payment gate');
+} catch (CheckoutInterrupted $response) {
+    check($response->payload['status'] === 409, 'changed signer should require review');
+}
+$order->email = $signer;
+$order->paid = true;
+$order->paidAt = new DateTimeImmutable();
+check(download_allowed($order, $order->state), 'signed and paid prepayment download remains locked');
+echo "PASS WooCommerce classic checkout, early order-pay denial and payment resumption\n";

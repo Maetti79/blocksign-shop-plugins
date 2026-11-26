@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BlockSign eSign for WooCommerce
  * Description: Release a free virtual product after BlockSign confirms its signature.
- * Version: 0.3.0
+ * Version: 0.4.0
  * Requires PHP: 8.1
  * Requires Plugins: woocommerce
  * License: GPL-3.0-or-later
@@ -42,6 +42,11 @@ function configured_product(): int
     return absint(get_option('blocksign_esign_product', 0));
 }
 
+function paid_timing(): string
+{
+    return get_option('blocksign_esign_paid_timing') === 'before_payment' ? 'before_payment' : 'after_payment';
+}
+
 function signature_settings(): array
 {
     return SignatureSettings::validate(get_option('blocksign_esign_signature', SignatureSettings::DEFAULTS));
@@ -74,6 +79,10 @@ add_action('admin_init', static function (): void {
             }
         },
     ]);
+    register_setting('blocksign_esign', 'blocksign_esign_paid_timing', [
+        'type' => 'string',
+        'sanitize_callback' => static fn ($value): string => $value === 'before_payment' ? 'before_payment' : 'after_payment',
+    ]);
     register_setting('blocksign_esign', 'blocksign_esign_product', [
         'type' => 'integer',
         'sanitize_callback' => 'absint',
@@ -87,6 +96,8 @@ add_action('admin_menu', static function (): void {
         echo '<form action="options.php" method="post">';
         settings_fields('blocksign_esign');
         printf('<label for="blocksign_esign_product">Protected product ID</label> <input id="blocksign_esign_product" type="number" min="0" name="blocksign_esign_product" value="%d">', configured_product());
+        printf('<p><label for="blocksign-paid-timing">Signature timing for paid orders</label> <select id="blocksign-paid-timing" name="blocksign_esign_paid_timing"><option value="after_payment"%s>After payment</option><option value="before_payment"%s>Before payment (classic checkout)</option></select></p>',
+            selected(paid_timing(), 'after_payment', false), selected(paid_timing(), 'before_payment', false));
         $settings = signature_settings();
         echo '<p><label for="blocksign-signature-level">Signature level</label> <select id="blocksign-signature-level" name="blocksign_esign_signature[signature_level]">';
         foreach (['aes' => 'EES', 'fes' => 'FES', 'qes' => 'QES'] as $value => $label) {
@@ -136,16 +147,20 @@ function snapshot(WC_Order $order): void
             throw new RuntimeException('The protected product must be ordered alone as a virtual item with a valid email address.');
         }
 
-        $timing = (float) $order->get_total() > 0.0 ? 'after_payment' : 'without_payment';
-        if ($timing === 'after_payment' && $order->get_payment_method() === 'cod') {
+        $storedTiming = $existing['timing'] ?? ($existing ? 'without_payment' : paid_timing());
+        $timing = (float) $order->get_total() > 0.0 ? $storedTiming : 'without_payment';
+        if ($timing !== 'without_payment' && $order->get_payment_method() === 'cod') {
             throw new RuntimeException('Cash on delivery is unavailable for the protected PDF.');
         }
         if ($existing) {
-            if (($existing['timing'] ?? 'without_payment') !== $timing) {
+            if (($storedTiming === 'without_payment') !== ((float) $order->get_total() === 0.0)) {
                 throw new RuntimeException('The protected order payment requirement cannot be changed.');
             }
             if (strcasecmp($existing['signer_email'], $order->get_billing_email()) !== 0) {
                 throw new RuntimeException('The protected order email cannot be changed.');
+            }
+            if ($timing === 'before_payment' && !payment_allowed($order, $existing)) {
+                $order->set_payment_method('');
             }
             return;
         }
@@ -170,6 +185,10 @@ function snapshot(WC_Order $order): void
                 asset(...)
             ),
         ]);
+        if ($timing === 'before_payment') {
+            // Suppress gateway instructions until the buyer actually submits the order-pay form.
+            $order->set_payment_method('');
+        }
         return;
     }
     if ($existing) {
@@ -181,6 +200,10 @@ add_action('woocommerce_checkout_create_order', __NAMESPACE__ . '\\snapshot');
 add_action('woocommerce_store_api_checkout_order_processed', static function (WC_Order $order): void {
     try {
         snapshot($order);
+        $state = $order->get_meta(META);
+        if (($state['timing'] ?? '') === 'before_payment') {
+            throw new RuntimeException('This product requires the classic WooCommerce checkout to collect signatures before payment.');
+        }
         $order->save_meta_data();
         enqueue($order);
     } catch (RuntimeException $error) {
@@ -193,14 +216,54 @@ add_action('woocommerce_store_api_checkout_order_processed', static function (WC
 function enqueue(WC_Order $order): void
 {
     $state = $order->get_meta(META);
-    if ($state && payment_ready($order, $state) && !RequiredSignatures::complete($state)) {
+    if ($state && can_start_signatures($order, $state) && !RequiredSignatures::complete($state)) {
         as_enqueue_async_action(JOB, [$order->get_id()], GROUP, true);
     }
 }
 
 add_action('woocommerce_checkout_order_processed', static function (int $id, array $data, WC_Order $order): void {
     enqueue($order);
-}, 10, 3);
+    if (($order->get_meta(META)['timing'] ?? '') !== 'before_payment') {
+        return;
+    }
+
+    // WooCommerce's checkout would otherwise call the selected gateway in this request.
+    WC()->session->set('order_awaiting_payment', $id);
+    WC()->session->save_data();
+    $statusUrl = $order->get_checkout_order_received_url();
+    if (wp_doing_ajax()) {
+        wp_send_json(['result' => 'success', 'redirect' => $statusUrl]);
+    }
+    wp_safe_redirect($statusUrl);
+    exit;
+}, 1, 3);
+
+function can_start_signatures(WC_Order $order, array $state): bool
+{
+    if (($state['timing'] ?? '') === 'before_payment') {
+        return (float) $order->get_total() > 0.0 && $order->needs_payment() && !$order->is_paid();
+    }
+    return payment_ready($order, $state);
+}
+
+function payment_allowed(WC_Order $order, array $state): bool
+{
+    return Gate::allows('payment', [[
+        'timing' => $state['timing'] ?? 'without_payment',
+        'completed' => RequiredSignatures::complete($state)
+            && strcasecmp($state['signer_email'] ?? '', $order->get_billing_email()) === 0,
+    ]]);
+}
+
+add_action('woocommerce_before_pay_action', static function (WC_Order $order): void {
+    $state = $order->get_meta(META);
+    if (!payment_allowed($order, (array) $state)) {
+        wp_die('Confirm all required signatures before paying for this order.', '', ['response' => 409]);
+    }
+    if ($state && ($_POST['payment_method'] ?? '') === 'cod') {
+        wp_die('Cash on delivery is unavailable for the protected PDF.', '', ['response' => 409]);
+    }
+}, 1);
 
 function enqueue_paid_order(int $id): void
 {
@@ -218,7 +281,7 @@ function payment_ready(WC_Order $order, array $state): bool
     $total = (float) $order->get_total();
     return match ($state['timing'] ?? 'without_payment') {
         'without_payment' => $total === 0.0,
-        'after_payment' => $total > 0.0 && $order->get_payment_method() !== 'cod'
+        'after_payment', 'before_payment' => $total > 0.0 && $order->get_payment_method() !== 'cod'
             && $order->is_paid() && $order->get_date_paid() !== null && (float) $order->get_total_refunded() === 0.0,
         default => false,
     };
@@ -261,7 +324,7 @@ function persist(WC_Order $order, array $state): void
 
 function advance(WC_Order $order, array $state): bool
 {
-    if (!payment_ready($order, $state)) {
+    if (!can_start_signatures($order, $state)) {
         return false;
     }
 
@@ -316,8 +379,16 @@ add_action('woocommerce_order_details_after_order_table', static function (WC_Or
     if (!$state) {
         return;
     }
+    if (($state['timing'] ?? '') === 'before_payment' && $order->needs_payment()) {
+        if (payment_allowed($order, $state)) {
+            printf('<p><a href="%s">Continue to payment</a></p>', esc_url($order->get_checkout_payment_url()));
+        } else {
+            echo '<p>BlockSign: check your email for the signature invitations. Reload this page after signing.</p>';
+        }
+        return;
+    }
     if (!download_allowed($order, $state)) {
-        echo ($state['timing'] ?? '') === 'after_payment' && !payment_ready($order, $state)
+        echo ($state['timing'] ?? 'without_payment') !== 'without_payment' && !payment_ready($order, $state)
             ? '<p>BlockSign: the download is locked while payment is unconfirmed.</p>'
             : '<p>BlockSign: the download is locked until all required signatures are confirmed.</p>';
         return;

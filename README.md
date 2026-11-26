@@ -1,6 +1,6 @@
 # BlockSign eSign für Shops
 
-Zwei Pakete teilen die Freigaberegeln. Das PHP-Paket enthält zusätzlich den ersten BlockSign-REST-Client. Die Piloten für WooCommerce und PrestaShop verarbeiten kostenlose und bezahlte Bestellungen für geschützte PDFs. Bei bezahlten Bestellungen beginnt der Signaturvorgang nach der Zahlungsbestätigung. Die gemeinsame Testsuite enthält auch die Freigaberegeln für vor der Zahlung erforderliche Unterschriften. Die entsprechenden Checkout-Sperren, Zustellnachweise und weitere Shop-Adapter sind zukünftige Ausbaustufen.
+Zwei Pakete teilen die Freigaberegeln. Das PHP-Paket enthält zusätzlich den ersten BlockSign-REST-Client. Die Piloten für WooCommerce und PrestaShop verarbeiten kostenlose und bezahlte Bestellungen für geschützte PDFs. Bei bezahlten Bestellungen beginnt der Signaturvorgang nach der Zahlungsbestätigung. Die gemeinsame Testsuite enthält auch die Freigaberegeln für vor der Zahlung erforderliche Unterschriften. WooCommerce unterstützt zusätzlich die Unterschrift vor der Zahlung im klassischen Checkout. Eine Sperre vor verbindlicher Bestellung, Zustellnachweise und weitere Shop-Adapter sind zukünftige Ausbaustufen.
 
 ## WooCommerce-Pilot
 
@@ -38,6 +38,12 @@ Hat die Bestellung einen positiven Gesamtbetrag, wartet der Shop auf die Zahlung
 WooCommerce reagiert auf Zahlungsbestätigung und Statuswechsel. Der Vorgang verlangt einen bezahlten Status und ein Zahlungsdatum. Auch wenn nur ein Teilbetrag erstattet wurde, bleibt der Download gesperrt. PrestaShop verarbeitet eine bezahlte Bestellung ab dem nächsten Worker-Lauf, sobald der aktuelle Bestellstatus als bezahlt gilt. Stornierte und erstattete Bestellungen sowie Positionen mit erstatteter Stückzahl bleiben gesperrt.
 
 Teste mit einer verzögerten Zahlung und zwei Pflichtdokumenten. Vor der Zahlungsbestätigung darf keine Signaturanfrage starten. Nach der Zahlung bleibt das PDF bis zur zweiten Unterschrift gesperrt. Prüfe anschließend den Download und die erneute Sperre nach Stornierung oder Erstattung. Die neuen Zahlungsabläufe sind in der CI mit simulierten Shop- und BlockSign-Antworten geprüft.
+
+## Signatur vor Zahlung in WooCommerce
+
+Wähle unter **Einstellungen → BlockSign eSign** bei **Signature timing for paid orders** die Option **Before payment (classic checkout)**. Die Einstellung gilt für neue bezahlte Bestellungen des konfigurierten PDF-Produkts. Der klassische WooCommerce-Checkout (Shortcode) legt eine offene Bestellung an und leitet zur Bestellansicht weiter, während BlockSign die Einladungen versendet. Nach der letzten bestätigten Signatur erscheint dort **Continue to payment**. Gäste können die Bestellansicht nach dem Signieren erneut öffnen. WooCommerce prüft die Signaturen auch bei einem direkten Aufruf des Bestellzahlungsformulars.
+
+Diese Variante setzt einen Zahlungsanbieter voraus, der WooCommerces standardmäßige Seite zur Zahlung offener Bestellungen unterstützt. Verwende für das geschützte Produkt den klassischen Checkout ohne Express-Zahlungsbuttons. Checkout Blocks weist diesen Modus serverseitig ab. Die Bestellung wird vor der Signatur angelegt. Wenn die Unterschrift vor einer verbindlichen Bestellung vorliegen muss, brauchst du eine Sperre vor der verbindlichen Bestellabgabe. PrestaShop verwendet für bezahlte Produkte weiterhin die Signatur nach Zahlung.
 
 ## Signaturniveau und Position
 
