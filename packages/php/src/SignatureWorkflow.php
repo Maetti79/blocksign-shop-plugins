@@ -16,6 +16,7 @@ final class SignatureWorkflow
     public function advance(array $state, Closure $persist, Closure $readAgreement): bool
     {
         $client = $this->client;
+        $deliveryProof = ($state['placement']['signature_level'] ?? '') === SignatureSettings::DELIVERY_PROOF;
         if ($state['phase'] === 'upload') {
             $pdf = $readAgreement();
             if ($pdf === false || strlen($pdf) > 10 * 1024 * 1024
@@ -25,9 +26,13 @@ final class SignatureWorkflow
 
             $state['phase'] = 'upload_pending_review';
             $persist($state);
-            $state['document_id'] = $client->upload($pdf);
-            $state['phase'] = 'prepare';
+            $state['document_id'] = $client->upload($pdf, $deliveryProof);
+            $state['phase'] = $deliveryProof ? 'delivery_invite' : 'prepare';
             $persist($state);
+        }
+
+        if ($deliveryProof) {
+            return $this->advanceDelivery($state, $persist);
         }
 
         if ($state['phase'] === 'prepare') {
@@ -84,4 +89,34 @@ final class SignatureWorkflow
 
         return false;
     }
+    private function advanceDelivery(array $state, Closure $persist): bool
+    {
+        if ($state['phase'] === 'delivery_invite') {
+            $state['phase'] = 'delivery_invite_pending_review';
+            $persist($state);
+            try {
+                $this->client->inviteDelivery($state['document_id'], $state['signer_email']);
+            } catch (RuntimeException $error) {
+                if ($error->getCode() !== 409) {
+                    throw $error;
+                }
+                $state['phase'] = 'delivery_invite';
+                $persist($state);
+                return true;
+            }
+            $state['phase'] = 'delivery_status';
+            $persist($state);
+        }
+
+        if ($state['phase'] !== 'delivery_status') {
+            return false;
+        }
+        if (!$this->client->deliveryAccepted($state['document_id'], $state['signer_email'])) {
+            return true;
+        }
+        $state['completed'] = true;
+        $persist($state);
+        return false;
+    }
+
 }

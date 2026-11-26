@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BlockSign eSign for WooCommerce
  * Description: Release a free virtual product after BlockSign confirms its signature.
- * Version: 0.9.0
+ * Version: 0.10.0
  * Requires PHP: 8.1
  * Requires Plugins: woocommerce
  * License: GPL-3.0-or-later
@@ -148,8 +148,8 @@ add_action('admin_menu', static function (): void {
         printf('<p><label for="blocksign-paid-timing">Signature timing for paid orders</label> <select id="blocksign-paid-timing" name="blocksign_esign_paid_timing"><option value="after_payment"%s>After payment</option><option value="before_payment"%s>Before payment (classic checkout)</option></select></p>',
             selected(paid_timing(), 'after_payment', false), selected(paid_timing(), 'before_payment', false));
         $settings = signature_settings();
-        echo '<p><label for="blocksign-signature-level">Signature level</label> <select id="blocksign-signature-level" name="blocksign_esign_signature[signature_level]">';
-        foreach (['aes' => 'EES', 'fes' => 'FES', 'qes' => 'QES'] as $value => $label) {
+        echo '<p><label for="blocksign-signature-level">Signature level or proof of delivery</label> <select id="blocksign-signature-level" name="blocksign_esign_signature[signature_level]">';
+        foreach (['aes' => 'EES', 'fes' => 'FES', 'qes' => 'QES', 'pod' => 'Proof of delivery'] as $value => $label) {
             printf('<option value="%s"%s>%s</option>', esc_attr($value), selected($settings['signature_level'], $value, false), esc_html($label));
         }
         echo '</select></p>';
@@ -381,7 +381,7 @@ function payment_allowed(WC_Order $order, array $state): bool
 add_action('woocommerce_before_pay_action', static function (WC_Order $order): void {
     $state = $order->get_meta(META);
     if (!payment_allowed($order, (array) $state)) {
-        wp_die('Confirm all required signatures before paying for this order.', '', ['response' => 409]);
+        wp_die('Confirm all required signatures and delivery confirmations before paying for this order.', '', ['response' => 409]);
     }
     if ($state && ($_POST['payment_method'] ?? '') === 'cod') {
         wp_die('Cash on delivery is unavailable for the protected PDF.', '', ['response' => 409]);
@@ -528,7 +528,7 @@ add_action('woocommerce_order_details_after_order_table', static function (WC_Or
     if (!download_allowed($order, $state)) {
         echo ($state['timing'] ?? 'without_payment') !== 'without_payment' && !payment_ready($order, $state)
             ? '<p>BlockSign: the download is locked while payment is unconfirmed.</p>'
-            : '<p>BlockSign: the download is locked until all required signatures are confirmed.</p>';
+            : '<p>BlockSign: the download is locked until all required signatures and delivery confirmations are confirmed.</p>';
         return;
     }
     foreach (OrderFiles::downloads($state) as $product => $file) {

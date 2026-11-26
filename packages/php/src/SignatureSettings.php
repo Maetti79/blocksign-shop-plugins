@@ -8,11 +8,15 @@ use InvalidArgumentException;
 
 final class SignatureSettings
 {
+    public const DELIVERY_PROOF = 'pod';
     public const DEFAULTS = ['signature_level' => 'aes', 'page' => 1, 'x' => 50, 'y' => 50];
 
     public static function validate(array $input): array
     {
         $level = $input['signature_level'] ?? null;
+        if ($level === self::DELIVERY_PROOF) {
+            return ['signature_level' => self::DELIVERY_PROOF] + self::DEFAULTS;
+        }
         $page = filter_var($input['page'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
         $x = filter_var($input['x'] ?? null, FILTER_VALIDATE_FLOAT);
         $y = filter_var($input['y'] ?? null, FILTER_VALIDATE_FLOAT);

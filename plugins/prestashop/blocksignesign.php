@@ -43,7 +43,7 @@ class BlocksignEsign extends Module
     public function __construct()
     {
         $this->name = 'blocksignesign';
-        $this->version = '0.8.0';
+        $this->version = '0.9.0';
         $this->author = 'BlockSign';
         $this->tab = 'administration';
         $this->ps_versions_compliancy = ['min' => '9.0.0', 'max' => _PS_VERSION_];
@@ -231,11 +231,12 @@ class BlocksignEsign extends Module
             ], [
                 'type' => 'select',
                 'name' => 'blocksign_level',
-                'label' => 'Signature level',
+                'label' => 'Signature level or proof of delivery',
                 'options' => ['query' => [
                     ['id' => 'aes', 'name' => 'EES'],
                     ['id' => 'fes', 'name' => 'FES'],
                     ['id' => 'qes', 'name' => 'QES'],
+                    ['id' => 'pod', 'name' => 'Proof of delivery'],
                 ], 'id' => 'id', 'name' => 'name'],
             ], [
                 'type' => 'text', 'name' => 'blocksign_page', 'label' => 'PDF page (starting at 1)',

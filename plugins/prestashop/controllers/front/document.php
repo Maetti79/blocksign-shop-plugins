@@ -55,7 +55,7 @@ class BlocksignEsignDocumentModuleFrontController extends ModuleFrontController
         }
 
         $message = (int) $row['next_attempt'] > 0
-            ? 'Your download will be available here after all required signatures are confirmed. Check your email for the invitations and reload this page after signing.'
+            ? 'Your download will be available here after all required signatures and delivery confirmations are complete. Check your email for the invitations and reload this page after signing.'
             : 'The download is locked. Contact the shop for help with this order.';
         if ($allowed) {
             $links = [];

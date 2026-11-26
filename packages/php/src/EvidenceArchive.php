@@ -34,13 +34,14 @@ final class EvidenceArchive
 
         $savedDocument = false;
         foreach ($state['documents'] ?? [$state] as $document) {
-            $request = $document['request_id'] ?? '';
+            $deliveryProof = ($document['placement']['signature_level'] ?? '') === SignatureSettings::DELIVERY_PROOF;
+            $request = $deliveryProof ? ($document['document_id'] ?? '') : ($document['request_id'] ?? '');
             if (!is_string($request) || !preg_match('/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iD', $request)) {
-                throw new RuntimeException('BlockSign order archive requires a valid signature request ID.');
+                throw new RuntimeException('BlockSign order archive requires a valid request or document ID.');
             }
-            $pdf = $folder . DIRECTORY_SEPARATOR . $request . '.pdf';
+            $pdf = $folder . DIRECTORY_SEPARATOR . $request . ($deliveryProof ? '.delivery.pdf' : '.pdf');
             $audit = $folder . DIRECTORY_SEPARATOR . $request . '.audit.json';
-            if ((is_file($pdf) && !is_link($pdf)) && (is_file($audit) && !is_link($audit))) {
+            if ((is_file($pdf) && !is_link($pdf)) && ($deliveryProof || (is_file($audit) && !is_link($audit)))) {
                 continue;
             }
             if ($savedDocument) {
@@ -48,9 +49,9 @@ final class EvidenceArchive
             }
 
             if (!is_file($pdf) || is_link($pdf)) {
-                self::write($pdf, $this->client->signedPdf($request));
+                self::write($pdf, $deliveryProof ? $this->client->deliveryPdf($request) : $this->client->signedPdf($request));
             }
-            if (!is_file($audit) || is_link($audit)) {
+            if (!$deliveryProof && (!is_file($audit) || is_link($audit))) {
                 self::write($audit, json_encode($this->client->auditTrail($request), JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR) . PHP_EOL);
             }
             $savedDocument = true;

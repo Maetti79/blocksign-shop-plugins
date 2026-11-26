@@ -21,15 +21,17 @@ final class RequiredSignatures
             $fields = array_map('trim', explode('|', $line));
             $file = $fields[0];
             $name = strtolower($file);
-            if (count($fields) !== 5 || !preg_match('/^[a-z0-9][a-z0-9._-]{0,119}\.pdf$/iD', $file) || isset($names[$name])) {
-                throw new InvalidArgumentException('Use a unique PDF basename and five fields per line. agreement.pdf and download.pdf are reserved.');
+            $level = strtolower($fields[1] ?? '');
+            $fieldCount = count($fields);
+            if (($fieldCount !== 5 && !($level === SignatureSettings::DELIVERY_PROOF && $fieldCount === 2))
+                || !preg_match('/^[a-z0-9][a-z0-9._-]{0,119}\.pdf$/iD', $file) || isset($names[$name])) {
+                throw new InvalidArgumentException('Use a unique PDF basename and valid signature settings or POD per line. agreement.pdf and download.pdf are reserved.');
             }
-            [, $level, $page, $x, $y] = $fields;
             $placement = SignatureSettings::validate([
-                'signature_level' => strtolower($level) === 'ees' ? 'aes' : strtolower($level),
-                'page' => $page,
-                'x' => $x,
-                'y' => $y,
+                'signature_level' => $level === 'ees' ? 'aes' : $level,
+                'page' => $fields[2] ?? null,
+                'x' => $fields[3] ?? null,
+                'y' => $fields[4] ?? null,
             ]);
             $documents[$file] = $placement;
             $names[$name] = true;

@@ -55,6 +55,12 @@ Hat die Bestellung einen positiven Gesamtbetrag, wartet der Shop auf die Zahlung
 
 PrestaShop verarbeitet eine bezahlte Bestellung ab dem nächsten Worker-Lauf, sobald der aktuelle Bestellstatus als bezahlt gilt. Stornierte und erstattete Bestellungen sowie Positionen mit erstatteter Stückzahl bleiben gesperrt.
 
+## Elektronischer Zustellnachweis
+
+Wähle **Proof of delivery** für das erste Pflichtdokument. Für ein zusätzliches PDF verwende die Kurzform `mitteilung.pdf | POD`. Bei einer Kategorie stellst du ihre ID voran, zum Beispiel `21 | mitteilung.pdf | POD`. BlockSign versendet das Dokument zur Empfangsbestätigung. Für diesen Vorgang sind keine Signaturposition oder Signaturstufe erforderlich.
+
+Der Shop wartet auf die Bestätigung für genau dieses Dokument und diesen Empfänger. Eine versendete Einladung genügt für die Freigabe nicht. Ist die private Archivierung aktiviert, speichert das Modul das zugestellte PDF mit dem von BlockSign eingebetteten Nachweis als `<document-id>.delivery.pdf`. Der Ablauf ist mit simulierten API-Antworten geprüft. Der Test mit einem echten BlockSign-Konto steht noch aus.
+
 ## Signierte PDFs und Audit-Trails archivieren
 
 Lege für die optionale Archivierung ein separates, privates Verzeichnis außerhalb aller Webroots an. Setze `BLOCKSIGN_ESIGN_ARCHIVE` in der Umgebung des CLI-Workers auf den absoluten Pfad. Der Worker-Benutzer benötigt dort Schreibzugriff.

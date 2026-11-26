@@ -5,7 +5,7 @@ declare(strict_types=1);
 use BlockSign\ESign\Client;
 use BlockSign\ESign\EvidenceArchive;
 
-foreach (['Client', 'RequiredSignatures', 'EvidenceArchive'] as $class) {
+foreach (['Client', 'SignatureSettings', 'RequiredSignatures', 'EvidenceArchive'] as $class) {
     require __DIR__ . '/../packages/php/src/' . $class . '.php';
 }
 
