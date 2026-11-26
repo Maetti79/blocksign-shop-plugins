@@ -2,7 +2,7 @@
 /**
  * Plugin Name: BlockSign eSign for WooCommerce
  * Description: Release a free virtual product after BlockSign confirms its signature.
- * Version: 0.5.0
+ * Version: 0.6.0
  * Requires PHP: 8.1
  * Requires Plugins: woocommerce
  * License: GPL-3.0-or-later
@@ -14,6 +14,7 @@ namespace BlockSign\WooCommerce;
 
 use BlockSign\ESign\Client;
 use BlockSign\ESign\Gate;
+use BlockSign\ESign\EvidenceArchive;
 use BlockSign\ESign\ProductScope;
 use BlockSign\ESign\RequiredSignatures;
 use BlockSign\ESign\SignatureSettings;
@@ -34,6 +35,7 @@ require_once __DIR__ . '/core/SignatureSettings.php';
 require_once __DIR__ . '/core/SignatureWorkflow.php';
 require_once __DIR__ . '/core/RequiredSignatures.php';
 require_once __DIR__ . '/core/ProductScope.php';
+require_once __DIR__ . '/core/EvidenceArchive.php';
 
 const META = '_blocksign_esign';
 const JOB = 'blocksign_esign_check';
@@ -322,24 +324,27 @@ function payment_ready(WC_Order $order, array $state): bool
 
 function client(): Client
 {
-    return new Client(static function (string $method, string $path, string $type, string $body): array {
+    return new Client(static function (string $method, string $path, string $type, string $body): array|string {
         $response = wp_remote_request('https://blocksign.io' . $path, [
             'method' => $method,
             'headers' => [
                 'Authorization' => 'Bearer ' . BLOCKSIGN_ESIGN_API_KEY,
                 'Content-Type' => $type,
-                'Accept' => 'application/json',
+                'Accept' => $type === 'application/pdf' ? $type : 'application/json',
             ],
             'body' => $body,
             'timeout' => 25,
             'redirection' => 0,
-            'limit_response_size' => 1048576,
+            'limit_response_size' => $type === 'application/pdf' ? Client::MAX_SIGNED_PDF_BYTES + 1 : 1048576,
         ]);
         $code = wp_remote_retrieve_response_code($response);
         if (is_wp_error($response) || $code < 200 || $code >= 300) {
             throw new RuntimeException('BlockSign API request failed.', (int) $code);
         }
 
+        if ($type === 'application/pdf') {
+            return wp_remote_retrieve_body($response);
+        }
         $result = json_decode(wp_remote_retrieve_body($response), true, 512, JSON_THROW_ON_ERROR);
         if (!is_array($result)) {
             throw new RuntimeException('Unexpected BlockSign response.');
@@ -378,12 +383,24 @@ add_action(JOB, static function (int $id): void {
     try {
         $order = wc_get_order($id);
         $state = $order ? $order->get_meta(META) : [];
-        if (!$state || RequiredSignatures::complete($state) || $order->has_status(['cancelled', 'refunded', 'failed'])) {
+        if (!$state || $order->has_status(['cancelled', 'refunded', 'failed'])) {
             return;
         }
 
         try {
             $retry = advance($order, $state);
+            $state = $order->get_meta(META);
+            if (defined('BLOCKSIGN_ESIGN_ARCHIVE') && BLOCKSIGN_ESIGN_ARCHIVE && RequiredSignatures::complete($state)) {
+                try {
+                    $root = ($_SERVER['DOCUMENT_ROOT'] ?? '') ?: ABSPATH;
+                    $retry = (new EvidenceArchive(client()))->storeNext(
+                        BLOCKSIGN_ESIGN_ARCHIVE, $root, 'woocommerce-' . get_current_blog_id() . '-' . $id, $state
+                    );
+                } catch (Throwable $error) {
+                    wc_get_logger()->warning('BlockSign evidence could not be archived for order ' . $id, ['source' => GROUP]);
+                    $retry = true;
+                }
+            }
         } catch (Throwable $error) {
             $state = $order->get_meta(META);
             $retry = !RequiredSignatures::needsReview($state);

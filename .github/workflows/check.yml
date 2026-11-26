@@ -15,6 +15,7 @@ jobs:
           node-version: '24'
       - run: find packages/php plugins tests -name '*.php' -print0 | xargs -0 -n1 php -l
       - run: php tests/gate.php
+      - run: php tests/evidence.php
       - run: npm --prefix packages/typescript ci
       - run: npm --prefix packages/typescript test
       - run: scripts/build-woocommerce.sh

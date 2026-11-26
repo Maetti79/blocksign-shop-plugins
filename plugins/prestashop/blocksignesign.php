@@ -2,6 +2,7 @@
 
 use BlockSign\ESign\Client;
 use BlockSign\ESign\Gate;
+use BlockSign\ESign\EvidenceArchive;
 use BlockSign\ESign\ProductScope;
 use BlockSign\ESign\RequiredSignatures;
 use BlockSign\ESign\SignatureSettings;
@@ -17,6 +18,7 @@ require_once __DIR__ . '/core/SignatureSettings.php';
 require_once __DIR__ . '/core/SignatureWorkflow.php';
 require_once __DIR__ . '/core/RequiredSignatures.php';
 require_once __DIR__ . '/core/ProductScope.php';
+require_once __DIR__ . '/core/EvidenceArchive.php';
 
 class BlocksignEsign extends Module
 {
@@ -28,7 +30,7 @@ class BlocksignEsign extends Module
     public function __construct()
     {
         $this->name = 'blocksignesign';
-        $this->version = '0.4.0';
+        $this->version = '0.5.0';
         $this->author = 'BlockSign';
         $this->tab = 'administration';
         $this->ps_versions_compliancy = ['min' => '9.0.0', 'max' => _PS_VERSION_];
@@ -323,17 +325,18 @@ class BlocksignEsign extends Module
         return $file;
     }
 
-    private static function workflow(string $apiKey): SignatureWorkflow
+    private static function client(string $apiKey): Client
     {
-        return new SignatureWorkflow(new Client(static function (string $method, string $path, string $type, string $body) use ($apiKey): array {
+        return new Client(static function (string $method, string $path, string $type, string $body) use ($apiKey): array|string {
             $curl = curl_init('https://blocksign.io' . $path);
             $response = '';
+            $limit = $type === 'application/pdf' ? Client::MAX_SIGNED_PDF_BYTES : 1048576;
             curl_setopt_array($curl, [
                 CURLOPT_CUSTOMREQUEST => $method,
-                CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $apiKey, 'Content-Type: ' . $type, 'Accept: application/json'],
+                CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $apiKey, 'Content-Type: ' . $type, ($type === 'application/pdf' ? 'Accept: application/pdf' : 'Accept: application/json')],
                 CURLOPT_TIMEOUT => 25,
-                CURLOPT_WRITEFUNCTION => static function ($handle, string $chunk) use (&$response): int {
-                    if (strlen($response) + strlen($chunk) > 1048576) {
+                CURLOPT_WRITEFUNCTION => static function ($handle, string $chunk) use (&$response, $limit): int {
+                    if (strlen($response) + strlen($chunk) > $limit) {
                         return 0;
                     }
                     $response .= $chunk;
@@ -348,12 +351,15 @@ class BlocksignEsign extends Module
             if ($result === false || $code < 200 || $code >= 300) {
                 throw new RuntimeException('BlockSign API request failed.', $result === false ? 0 : $code);
             }
+            if ($type === 'application/pdf') {
+                return $response;
+            }
             $decoded = json_decode($response, true, 512, JSON_THROW_ON_ERROR);
             if (!is_array($decoded)) {
                 throw new RuntimeException('Unexpected BlockSign response.');
             }
             return $decoded;
-        }));
+        });
     }
 
     public static function processQueue(): void
@@ -380,15 +386,18 @@ class BlocksignEsign extends Module
                 true,
                 false
             );
+            $client = self::client($apiKey);
+            $workflow = new SignatureWorkflow($client);
+            $archive = getenv('BLOCKSIGN_ESIGN_ARCHIVE') ? new EvidenceArchive($client) : null;
             foreach ($rows as $candidate) {
-                self::processOrder((int) $candidate['id_order'], self::workflow($apiKey));
+                self::processOrder((int) $candidate['id_order'], $workflow, $archive);
             }
         } finally {
             $db->getValue("SELECT RELEASE_LOCK('$lock')", false);
         }
     }
 
-    public static function processOrder(int $id, SignatureWorkflow $workflow): void
+    public static function processOrder(int $id, SignatureWorkflow $workflow, ?EvidenceArchive $archive = null): void
     {
         $row = self::findOrder($id);
         if (!$row) {
@@ -427,6 +436,17 @@ class BlocksignEsign extends Module
                 if (!$retry) {
                     PrestaShopLogger::addLog('BlockSign creation needs manual review.', 3, null, 'Order', $id);
                 }
+            }
+        }
+        if ($validOrder && $archive && RequiredSignatures::complete($state) && time() - $started < 604800) {
+            try {
+                $root = ($_SERVER['DOCUMENT_ROOT'] ?? '') ?: _PS_ROOT_DIR_;
+                $retry = $archive->storeNext(
+                    (string) getenv('BLOCKSIGN_ESIGN_ARCHIVE'), $root, 'prestashop-' . (int) $order->id_shop . '-' . $id, $state
+                );
+            } catch (Throwable $error) {
+                PrestaShopLogger::addLog('BlockSign evidence could not be archived.', 2, null, 'Order', $id);
+                $retry = true;
             }
         }
         self::updateRow($id, ['next_attempt' => $retry ? time() + 120 : 0]);

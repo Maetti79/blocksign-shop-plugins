@@ -46,6 +46,12 @@ Hat die Bestellung einen positiven Gesamtbetrag, wartet der Shop auf die Zahlung
 
 PrestaShop verarbeitet eine bezahlte Bestellung ab dem nächsten Worker-Lauf, sobald der aktuelle Bestellstatus als bezahlt gilt. Stornierte und erstattete Bestellungen sowie Positionen mit erstatteter Stückzahl bleiben gesperrt.
 
+## Signierte PDFs und Audit-Trails archivieren
+
+Lege für die optionale Archivierung ein separates, privates Verzeichnis außerhalb aller Webroots an. Setze `BLOCKSIGN_ESIGN_ARCHIVE` in der Umgebung des CLI-Workers auf den absoluten Pfad. Der Worker-Benutzer benötigt dort Schreibzugriff.
+
+Nach Bestätigung aller Pflichtsignaturen ruft der Hintergrundjob pro BlockSign-Vorgang das signierte PDF und den Audit-Trail ab. Er speichert sie im Unterordner `prestashop-<shop-id>-<bestell-id>` als `<request-id>.pdf` und `<request-id>.audit.json`. Das Limit für ein signiertes PDF beträgt 16 MiB. Die Dateien sind über den Server verfügbar. Ein Fehler bei der Archivierung wird protokolliert und lässt die normale Downloadfreigabe unberührt. Abgeschlossene Bestellungen ohne geplanten Hintergrundjob werden beim Aktivieren der Archivierung nicht rückwirkend verarbeitet.
+
 ## Prüfung vor einem Live-Einsatz
 
 Im Testshop sind insbesondere Modulinstallation, normaler und Gast-Checkout, E-Mail-Einladung, Statuslink, Download-Sperre und anschließende Freigabe mit einem BlockSign-Testkonto zu prüfen. Die CI deckt Registrierung, Signaturablauf und Freigabeentscheidung mit simulierten Abhängigkeiten ab. Zusätzlich wurden Modulinstallation, Bestellregistrierung, Worker-Start und HTTP-Download vor und nach einer simulierten Signatur mit PrestaShop 9.0.0 und MariaDB 10.11 geprüft.

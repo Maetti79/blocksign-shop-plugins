@@ -54,6 +54,12 @@ Wähle unter **Einstellungen → BlockSign eSign** bei **Signature timing for pa
 
 Diese Variante setzt einen Zahlungsanbieter voraus, der WooCommerces standardmäßige Seite zur Zahlung offener Bestellungen unterstützt. Verwende für das geschützte Produkt den klassischen Checkout ohne Express-Zahlungsbuttons. Checkout Blocks weist diesen Modus serverseitig ab. Die Bestellung wird vor der Signatur angelegt. Wenn die Unterschrift vor einer verbindlichen Bestellung vorliegen muss, brauchst du eine Sperre vor der verbindlichen Bestellabgabe.
 
+## Signierte PDFs und Audit-Trails archivieren
+
+Lege für die optionale Archivierung ein separates, privates Verzeichnis außerhalb aller Webroots an. Definiere in `wp-config.php` zusätzlich die Konstante `BLOCKSIGN_ESIGN_ARCHIVE` mit dem absoluten Pfad. Der WordPress-Cron-Benutzer benötigt dort Schreibzugriff.
+
+Nach Bestätigung aller Pflichtsignaturen ruft der Hintergrundjob pro BlockSign-Vorgang das signierte PDF und den Audit-Trail ab. Er speichert sie im Unterordner `woocommerce-<site-id>-<bestell-id>` als `<request-id>.pdf` und `<request-id>.audit.json`. Das Limit für ein signiertes PDF beträgt 16 MiB. Die Dateien sind über den Server verfügbar. Ein Fehler bei der Archivierung wird protokolliert und lässt die normale Downloadfreigabe unberührt. Abgeschlossene Bestellungen ohne geplanten Hintergrundjob werden beim Aktivieren der Archivierung nicht rückwirkend verarbeitet.
+
 ## Prüfung vor einem Live-Einsatz
 
 Führe in einem Testshop eine Gast- und eine Kontobestellung durch. Prüfe die Sperre vor Abschluss, die BlockSign-Einladung, das Erscheinen des Links nach Bestätigung, den Download und den verweigerten Zugriff mit ungültigem Bestellschlüssel. Prüfe klassischen Checkout und Checkout Blocks separat. In dieser Repository-Version wurde der Live-Ablauf mit WooCommerce und einem BlockSign-API-Key noch nicht verifiziert.

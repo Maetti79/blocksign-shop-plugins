@@ -15,6 +15,7 @@ GitHub Actions baut die Installationspakete. [Workflow und ZIP-Artefakte](https:
 
 - **Produktzuordnung** für ein einzelnes Produkt, eine Kategorie oder alle geeigneten virtuellen Produkte.
 - **Ein oder mehrere Pflichtdokumente** mit EES, FES oder QES sowie PDF-Seite und X/Y-Position je Dokument.
+- **Private Ablage von Nachweisen** für signierte PDFs und Audit-Trails.
 - **Geschützter Download** mit einer Freigabeprüfung anhand des Bestell-, Zahlungs- und Signaturstatus.
 
 Die Module verarbeiten derzeit ein Exemplar eines geschützten Produkts je Bestellung. Alle vom Modul erfassten Produkte teilen sich die Dokument- und Downloadkonfiguration. Eine Sperre vor verbindlicher Bestellung, Zustellnachweise und weitere Shop-Adapter sind geplante Ausbaustufen.
