@@ -10,6 +10,7 @@ import { app } from "../plugins/shopify/src/server.ts";
 const orderId = "gid://shopify/Order/410";
 const draftOrderId = "gid://shopify/Order/411";
 const freeOrderId = "gid://shopify/Order/412";
+const shipmentOrderId = "gid://shopify/Order/413";
 const productId = "gid://shopify/Product/110";
 const variantId = "gid://shopify/ProductVariant/120";
 const onlyDraftVariant = "gid://shopify/ProductVariant/121";
@@ -51,7 +52,9 @@ test("Shopify verifies the checkout identity, waits for payment, releases downlo
   const paidOrder = order(orderId, variantId);
   const manualOrder = order(draftOrderId, onlyDraftVariant);
   const freeOrder = order(freeOrderId, variantId, "0.00");
-  const orders = new Map([[orderId, paidOrder], [draftOrderId, manualOrder], [freeOrderId, freeOrder]]);
+  const shipmentOrder = order(shipmentOrderId, "gid://shopify/ProductVariant/122");
+  shipmentOrder.lineItems.nodes[0].product.tags = ["blocksign-versand"];
+  const orders = new Map([[orderId, paidOrder], [draftOrderId, manualOrder], [freeOrderId, freeOrder], [shipmentOrderId, shipmentOrder]]);
   const calls = [];
   let confirmed = true;
   let issuedDraft;
@@ -67,7 +70,10 @@ test("Shopify verifies the checkout identity, waits for payment, releases downlo
       return { id: "gid://shopify/DraftOrder/510", invoiceUrl: "https://" + shop + "/invoices/example" };
     },
     draftOrder: async () => null,
-    tagOrder: async () => assert.fail("No shipping tag expected for downloads"),
+    tagOrder: async (id, add) => {
+      assert.equal(id, shipmentOrderId);
+      shipmentOrder.tags = add ? ["blocksign-ready"] : [];
+    },
   };
   const client = async (method, path) => {
     calls.push([method, path]);
@@ -83,6 +89,7 @@ test("Shopify verifies the checkout identity, waits for payment, releases downlo
     files: root, rules: [
       { variant: variantId, flow: "after_payment", mode: "download", documents: [{ file: "agreement.pdf" }], download: "download.pdf" },
       { variant: onlyDraftVariant, flow: "before_payment", slug: "private-access", mode: "membership", documents: [{ file: "agreement.pdf" }], download: "download.pdf" },
+      { tag: "blocksign-versand", flow: "after_payment", mode: "shipment", documents: [{ file: "agreement.pdf" }] },
     ],
   }, api, client);
   t.after(async () => {
@@ -160,6 +167,16 @@ test("Shopify verifies the checkout identity, waits for payment, releases downlo
   assert.equal((await webhook("orders/paid", draftOrderId)).status, 204);
   await runtime.tick();
   assert.equal((await forBuyer("/proxy/order/411", { download: "0" })).status, 200);
+
+  shipmentOrder.displayFinancialStatus = "PAID";
+  shipmentOrder.totalOutstandingSet = amount("0.00");
+  assert.equal((await webhook("orders/paid", shipmentOrderId)).status, 204);
+  await runtime.tick();
+  assert.deepEqual(shipmentOrder.tags, ["blocksign-ready"]);
+  shipmentOrder.displayFinancialStatus = "VOIDED";
+  assert.equal((await webhook("orders/updated", shipmentOrderId)).status, 204);
+  await runtime.tick();
+  assert.deepEqual(shipmentOrder.tags, []);
 });
 
 test("TypeScript workflow supports electronic proof of delivery", async () => {

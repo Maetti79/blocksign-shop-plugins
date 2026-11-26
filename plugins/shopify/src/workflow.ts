@@ -62,6 +62,9 @@ export function service(config: Config, db: Queue, api: Shopify, blocksign: Tran
       }
       if (existing.phase !== "excluded" && paid(order)) {
         db.save({ ...existing, expires: existing.expires || Date.now() + week }, Date.now());
+      } else if (!paid(order) && existing.shipment && order.tags.includes("blocksign-ready")) {
+        await api.tagOrder(id, false);
+        db.save({ ...existing, tagged: false }, 0);
       }
       return;
     }
@@ -137,7 +140,10 @@ export function service(config: Config, db: Queue, api: Shopify, blocksign: Tran
         return;
       }
       if (!paid(order)) {
-        if (job.shipment && order.tags.includes("blocksign-ready")) await api.tagOrder(job.id, false);
+        if (job.shipment && order.tags.includes("blocksign-ready")) {
+          await api.tagOrder(job.id, false);
+          job.tagged = false;
+        }
         db.save(job, 0);
         return;
       }
